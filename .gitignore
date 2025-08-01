@@ -21,3 +21,59 @@
 
 # virtual machine crash logs, see http://www.java.com/en/download/help/error_hotspot.xml
 hs_err_pid*
+=======
+# .gitignore for the Redshot project
+#
+# This file specifies intentionally untracked files to ignore when using Git.
+# It covers Python bytecode, compiled assets, build artifacts, Node modules,
+# local databases, environment files and other temporary data. Adjust as needed
+# for your workflow.
+
+## Python
+__pycache__/
+*.py[cod]
+
+## Jupyter/IPython
+.ipython/
+
+## Local databases and persistent data
+data/
+*.db
+trades.db
+
+## Tarballs and archives
+*.tar.gz
+*.zip
+
+## Node.js dependencies and build outputs
+node_modules/
+frontend/node_modules/
+frontend/dist/
+frontend/build/
+frontend/.vite/
+frontend/.next/
+
+## Compiled frontend distribution copied into the backend
+frontend-dist/
+
+## Development environment and editor settings
+.env
+.DS_Store
+.vscode/
+.idea/
+
+## Miscellaneous temporary files
+*~
+.rsync-tmp/
+npm-debug.log*
+# Ignore root-level package files that are unrelated to the Redshot project.  The
+# frontend/package.json is intentionally kept in version control.
+/package-lock.json
+/package.json
+
+## Slide/template files not needed in the core application
+answer.js
+create_montage.py
+pptx_to_img.py
+slides_template.js
+placeholder_light_gray_block.png
