@@ -50,6 +50,9 @@ export default function App() {
   const [strategyParams, setStrategyParams] = useState({});
   const [selectedAsset, setSelectedAsset] = useState('BTC/USDT');
   const [seriesData, setSeriesData] = useState({ x: [], prices: [], short_sma: [], long_sma: [] });
+  // Simulation interval in minutes and input value for updates
+  const [simulationInterval, setSimulationInterval] = useState(null);
+  const [intervalInput, setIntervalInput] = useState('');
 
   // Track which section of the dashboard is currently active.  This controls
   // which panel is displayed in the main content area.  Initial section
@@ -80,6 +83,38 @@ export default function App() {
       setSeriesData(data);
     } catch (error) {
       console.error('Failed to fetch series data', error);
+    }
+  }
+
+  // Fetch the current simulation interval from the server
+  async function fetchSimulationInterval() {
+    try {
+      const res = await fetch('/api/simulation_interval');
+      const data = await res.json();
+      setSimulationInterval(data.minutes);
+    } catch (error) {
+      console.error('Failed to fetch simulation interval', error);
+    }
+  }
+
+  // Update the simulation interval on the server
+  async function updateSimulationInterval() {
+    if (!intervalInput) return;
+    const value = parseFloat(intervalInput);
+    if (isNaN(value) || value <= 0) {
+      alert('Please enter a valid positive number of minutes');
+      return;
+    }
+    try {
+      await fetch('/api/simulation_interval', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ minutes: value }),
+      });
+      await fetchSimulationInterval();
+      setIntervalInput('');
+    } catch (error) {
+      console.error('Failed to update simulation interval', error);
     }
   }
 
@@ -186,6 +221,7 @@ export default function App() {
     fetchStrategyDetails();
     fetchStrategyParams();
     fetchSeries();
+    fetchSimulationInterval();
   }, []);
 
   async function simulate() {
@@ -272,6 +308,11 @@ export default function App() {
               <li className="nav-item">
                 <button className={`nav-link text-start ${activeSection === 'strategy_chart' ? 'active' : ''}`} onClick={() => setActiveSection('strategy_chart')}>
                   Strategy Chart
+                </button>
+              </li>
+              <li className="nav-item">
+                <button className={`nav-link text-start ${activeSection === 'simulation' ? 'active' : ''}`} onClick={() => setActiveSection('simulation')}>
+                  Simulation Settings
                 </button>
               </li>
             </ul>
@@ -761,6 +802,34 @@ export default function App() {
                       },
                     }}
                   />
+                </div>
+              </div>
+            )}
+
+            {activeSection === 'simulation' && (
+              <div>
+                <h2>Simulation Settings</h2>
+                <p>
+                  Current interval: {' '}
+                  <strong>{
+                    simulationInterval !== null && simulationInterval !== undefined
+                      ? simulationInterval.toFixed(2) + ' minutes'
+                      : '—'
+                  }</strong>
+                </p>
+                <div className="input-group" style={{ maxWidth: '300px' }}>
+                  <input
+                    type="number"
+                    className="form-control"
+                    placeholder="Set interval (minutes)"
+                    value={intervalInput}
+                    onChange={(e) => setIntervalInput(e.target.value)}
+                    min="0.1"
+                    step="0.1"
+                  />
+                  <button className="btn btn-secondary" onClick={updateSimulationInterval}>
+                    Update Interval
+                  </button>
                 </div>
               </div>
             )}

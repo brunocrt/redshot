@@ -24,6 +24,8 @@ from redshot.portfolio_manager import PortfolioManager
 from redshot.asset_advisor import AssetAdvisor
 from redshot.trade_broker import TradeBroker
 from redshot.system_supervisor import SystemSupervisor
+import threading
+import time
 from redshot.database import init_db, get_all_trades
 from redshot.config import get_exchange_credentials
 
@@ -115,12 +117,41 @@ supervisor = SystemSupervisor(
     trailing_stop_pct=0.05,
 )
 
+# Interval (in seconds) for automatic simulation cycles.  Defaults to 30 minutes
+# (1800 seconds).  A background thread will invoke the supervisor on this
+# schedule.  The interval can be updated via the /api/simulation_interval
+# endpoint.  The thread reads this variable on each loop to respect changes.
+simulation_interval_seconds = int(os.environ.get("SIMULATION_INTERVAL_SECONDS", 1800))
+
+def periodic_simulation_loop() -> None:
+    """Background thread that runs supervisor cycles at a configurable interval."""
+    from datetime import datetime
+    global simulation_interval_seconds
+    while True:
+        try:
+            # Sleep for the configured interval
+            time.sleep(simulation_interval_seconds)
+            # Perform a simulation cycle
+            prev_value = portfolio_manager.compute_portfolio_value()
+            supervisor.run_once()
+            # Update performance metrics; ignore the returned result
+            portfolio_manager.compute_performance(prev_value, datetime.utcnow())
+        except Exception as exc:
+            LOGGER.error("Error running periodic simulation: %s", exc, exc_info=True)
+            # Wait a little before retrying to avoid tight loops
+            time.sleep(5)
+
 
 @app.on_event("startup")
 def startup_event() -> None:
     """Initialise the database at application startup."""
     init_db()
     LOGGER.info("API server started")
+    # Launch the periodic simulation thread.  It will run in the background
+    # and trigger supervisor.run_once() on the configured schedule.  We use
+    # daemon=True so that it does not prevent process shutdown.
+    thread = threading.Thread(target=periodic_simulation_loop, daemon=True)
+    thread.start()
 
 
 @app.get("/api/portfolio")
@@ -472,3 +503,34 @@ def set_initial_capital(payload: dict) -> dict:
         "initial_capital": portfolio_manager.initial_cash,
         "cash": portfolio_manager.cash,
     }
+
+
+# ----------------- Simulation interval configuration -----------------
+
+@app.get("/api/simulation_interval")
+def get_simulation_interval() -> dict:
+    """Return the current simulation interval in minutes."""
+    # Convert seconds to minutes for more intuitive display
+    minutes = simulation_interval_seconds / 60.0
+    return {"minutes": minutes}
+
+
+@app.post("/api/simulation_interval")
+def set_simulation_interval(payload: dict) -> dict:
+    """
+    Update the interval at which automatic simulation cycles run.  Expects a
+    payload with a ``minutes`` field specifying the number of minutes
+    between cycles.  Accepts values greater than zero.  The background
+    simulation loop will pick up the new interval on its next iteration.
+    """
+    global simulation_interval_seconds
+    if not isinstance(payload, dict) or "minutes" not in payload:
+        raise HTTPException(status_code=400, detail="Payload must include 'minutes'")
+    try:
+        minutes = float(payload["minutes"])
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="Invalid minutes value")
+    if minutes <= 0:
+        raise HTTPException(status_code=400, detail="Interval must be greater than zero")
+    simulation_interval_seconds = int(minutes * 60)
+    return {"minutes": minutes}
