@@ -54,20 +54,28 @@ export default function App() {
   const [simulationInterval, setSimulationInterval] = useState(null);
   const [intervalInput, setIntervalInput] = useState('');
 
+  // Authentication token and login state.  The token is persisted in
+  // localStorage so that the session survives page reloads.  Login form
+  // values are stored in dedicated states.
+  const [token, setToken] = useState(() => localStorage.getItem('token') || '');
+  const [isAuthenticated, setIsAuthenticated] = useState(() => Boolean(localStorage.getItem('token')));
+  const [loginUsername, setLoginUsername] = useState('');
+  const [loginPassword, setLoginPassword] = useState('');
+
   // Track which section of the dashboard is currently active.  This controls
   // which panel is displayed in the main content area.  Initial section
   // defaults to 'status' to show the system status overview.
   const [activeSection, setActiveSection] = useState('status');
 
   async function fetchPortfolio() {
-    const res = await fetch('/api/portfolio');
+    const res = await fetch('/api/portfolio', { headers: { Authorization: token } });
     const data = await res.json();
     setPortfolio(data);
   }
 
   async function fetchStrategyParams() {
     try {
-      const res = await fetch('/api/strategy_params');
+      const res = await fetch('/api/strategy_params', { headers: { Authorization: token } });
       const data = await res.json();
       setStrategyParams(data);
     } catch (error) {
@@ -78,7 +86,7 @@ export default function App() {
   async function fetchSeries(assetCode = selectedAsset) {
     try {
       const encoded = encodeURIComponent(assetCode);
-      const res = await fetch(`/api/strategy_series/${encoded}?days=60`);
+      const res = await fetch(`/api/strategy_series/${encoded}?days=60`, { headers: { Authorization: token } });
       const data = await res.json();
       setSeriesData(data);
     } catch (error) {
@@ -89,7 +97,7 @@ export default function App() {
   // Fetch the current simulation interval from the server
   async function fetchSimulationInterval() {
     try {
-      const res = await fetch('/api/simulation_interval');
+      const res = await fetch('/api/simulation_interval', { headers: { Authorization: token } });
       const data = await res.json();
       setSimulationInterval(data.minutes);
     } catch (error) {
@@ -108,7 +116,7 @@ export default function App() {
     try {
       await fetch('/api/simulation_interval', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', Authorization: token },
         body: JSON.stringify({ minutes: value }),
       });
       await fetchSimulationInterval();
@@ -123,7 +131,7 @@ export default function App() {
     try {
       await fetch('/api/strategy_params', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', Authorization: token },
         body: JSON.stringify(strategyParams),
       });
       // Refresh strategies and details
@@ -147,43 +155,43 @@ export default function App() {
   const selectableAssets = assetsList.length > 0 ? assetsList : defaultAssets;
 
   async function fetchTrades() {
-    const res = await fetch('/api/trades');
+    const res = await fetch('/api/trades', { headers: { Authorization: token } });
     const data = await res.json();
     setTrades(data);
   }
 
   async function fetchRecommendations() {
-    const res = await fetch('/api/recommendations');
+    const res = await fetch('/api/recommendations', { headers: { Authorization: token } });
     const data = await res.json();
     setRecommendations(data);
   }
 
   async function fetchStatus() {
-    const res = await fetch('/api/status');
+    const res = await fetch('/api/status', { headers: { Authorization: token } });
     const data = await res.json();
     setStatus(data);
   }
 
   async function fetchResearchActivity() {
-    const res = await fetch('/api/research_activity');
+    const res = await fetch('/api/research_activity', { headers: { Authorization: token } });
     const data = await res.json();
     setResearchActivity(data);
   }
 
   async function fetchStrategies() {
-    const res = await fetch('/api/strategies');
+    const res = await fetch('/api/strategies', { headers: { Authorization: token } });
     const data = await res.json();
     setStrategies(data);
   }
 
   async function fetchTradePerformance() {
-    const res = await fetch('/api/trade_performance');
+    const res = await fetch('/api/trade_performance', { headers: { Authorization: token } });
     const data = await res.json();
     setTradePerformance(data);
   }
 
   async function fetchStrategyDetails() {
-    const res = await fetch('/api/strategy_details');
+    const res = await fetch('/api/strategy_details', { headers: { Authorization: token } });
     const data = await res.json();
     setStrategyDetails(data);
   }
@@ -198,7 +206,7 @@ export default function App() {
     try {
       await fetch('/api/initial_capital', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', Authorization: token },
         body: JSON.stringify({ capital: value }),
       });
       // Reload relevant data after setting capital
@@ -210,7 +218,11 @@ export default function App() {
     }
   }
 
+  // Fetch data after the user has authenticated.  This effect depends on
+  // ``isAuthenticated`` so that it only fires once a token is available.  It
+  // reloads data whenever the selected asset changes to update the chart.
   useEffect(() => {
+    if (!isAuthenticated) return;
     fetchPortfolio();
     fetchTrades();
     fetchRecommendations();
@@ -220,14 +232,15 @@ export default function App() {
     fetchTradePerformance();
     fetchStrategyDetails();
     fetchStrategyParams();
-    fetchSeries();
+    fetchSeries(selectedAsset);
     fetchSimulationInterval();
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isAuthenticated, selectedAsset]);
 
   async function simulate() {
     setLoading(true);
     try {
-      await fetch('/api/simulate', { method: 'POST' });
+      await fetch('/api/simulate', { method: 'POST', headers: { Authorization: token } });
       await fetchPortfolio();
       await fetchTrades();
       await fetchRecommendations();
@@ -245,6 +258,64 @@ export default function App() {
     }
   }
 
+  // Handle user login.  Submits credentials to the API and stores the returned
+  // token on success.  After authentication, initial data is loaded.
+  async function handleLogin(e) {
+    e.preventDefault();
+    try {
+      const res = await fetch('/api/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: loginUsername, password: loginPassword }),
+      });
+      if (!res.ok) {
+        alert('Invalid credentials');
+        return;
+      }
+      const data = await res.json();
+      localStorage.setItem('token', data.token);
+      setToken(data.token);
+      setIsAuthenticated(true);
+      // Clear login form
+      setLoginUsername('');
+      setLoginPassword('');
+      // Load data after login
+      fetchPortfolio();
+      fetchTrades();
+      fetchRecommendations();
+      fetchStatus();
+      fetchResearchActivity();
+      fetchStrategies();
+      fetchTradePerformance();
+      fetchStrategyDetails();
+      fetchStrategyParams();
+      fetchSeries();
+      fetchSimulationInterval();
+    } catch (error) {
+      console.error('Login failed', error);
+    }
+  }
+
+  // Handle user logout.  Clears the stored token, resets auth state and
+  // clears loaded data.  This simply sets isAuthenticated to false so that
+  // the login form is shown again.
+  function handleLogout() {
+    localStorage.removeItem('token');
+    setToken('');
+    setIsAuthenticated(false);
+    // Clear cached data on logout
+    setPortfolio({ total_value: 0, cash: 0, positions: [] });
+    setTrades([]);
+    setRecommendations([]);
+    setStatus({ last_cycle: null, portfolio_value: null, variation: null, pnl: null, initial_capital: null });
+    setResearchActivity([]);
+    setStrategies([]);
+    setTradePerformance([]);
+    setStrategyDetails([]);
+    setStrategyParams({});
+    setSeriesData({ x: [], prices: [], short_sma: [], long_sma: [] });
+  }
+
   // Helper for formatting numeric values.  If the value is not a finite
   // number, an em dash is returned instead.  The default precision is two
   // decimals but can be overridden.  This helper is used throughout the
@@ -253,6 +324,42 @@ export default function App() {
     return typeof value === 'number' && Number.isFinite(value)
       ? value.toFixed(decimals)
       : '—';
+  }
+
+  // If the user is not authenticated, display a login form instead of the dashboard.
+  if (!isAuthenticated) {
+    return (
+      <div className="container d-flex justify-content-center align-items-center" style={{ minHeight: '100vh' }}>
+        <form onSubmit={handleLogin} className="bg-dark p-4 rounded" style={{ minWidth: '320px' }}>
+          <h2 className="mb-3 text-light">Login</h2>
+          <div className="mb-3">
+            <label className="form-label text-light" htmlFor="username">Username</label>
+            <input
+              id="username"
+              type="text"
+              className="form-control"
+              value={loginUsername}
+              onChange={(e) => setLoginUsername(e.target.value)}
+              required
+            />
+          </div>
+          <div className="mb-3">
+            <label className="form-label text-light" htmlFor="password">Password</label>
+            <input
+              id="password"
+              type="password"
+              className="form-control"
+              value={loginPassword}
+              onChange={(e) => setLoginPassword(e.target.value)}
+              required
+            />
+          </div>
+          <button type="submit" className="btn btn-primary w-100">
+            Login
+          </button>
+        </form>
+      </div>
+    );
   }
 
   // Render navigation bar on the left and the main content on the right.
@@ -313,6 +420,11 @@ export default function App() {
               <li className="nav-item">
                 <button className={`nav-link text-start ${activeSection === 'simulation' ? 'active' : ''}`} onClick={() => setActiveSection('simulation')}>
                   Simulation Settings
+                </button>
+              </li>
+              <li className="nav-item mt-3">
+                <button className="nav-link text-start text-danger" onClick={handleLogout}>
+                  Logout
                 </button>
               </li>
             </ul>
@@ -396,7 +508,7 @@ export default function App() {
                   <strong>${formatNumber(portfolio.total_value - portfolio.cash)}</strong>
                 </p>
                 <div className="table-responsive">
-                  <table className="table table-dark table-striped table-bordered">
+                  <table className="table table-dark table-hover table-striped table-bordered">
                     <thead>
                       <tr>
                         <th>Asset</th>
@@ -431,7 +543,7 @@ export default function App() {
               <div>
                 <h2>Recommendations</h2>
                 <div className="table-responsive">
-                  <table className="table table-dark table-striped table-bordered">
+                  <table className="table table-dark table-hover table-striped table-bordered">
                     <thead>
                       <tr>
                         <th>Asset</th>
@@ -482,7 +594,7 @@ export default function App() {
               <div>
                 <h2>Trades</h2>
                 <div className="table-responsive">
-                  <table className="table table-dark table-striped table-bordered">
+                  <table className="table table-dark table-hover table-striped table-bordered">
                     <thead>
                       <tr>
                         <th>Time</th>
@@ -549,7 +661,7 @@ export default function App() {
               <div>
                 <h2>Market Research &amp; Strategy Activity</h2>
                 <div className="table-responsive">
-                  <table className="table table-dark table-striped table-bordered">
+                  <table className="table table-dark table-hover table-striped table-bordered">
                     <thead>
                       <tr>
                         <th>Asset</th>
@@ -620,7 +732,7 @@ export default function App() {
               <div>
                 <h2>Strategy Calculation Details</h2>
                 <div className="table-responsive">
-                  <table className="table table-dark table-striped table-bordered">
+                  <table className="table table-dark table-hover table-striped table-bordered">
                     <thead>
                       <tr>
                         <th>Asset</th>

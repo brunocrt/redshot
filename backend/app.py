@@ -19,6 +19,9 @@ from fastapi import Path, Query
 from fastapi.middleware.cors import CORSMiddleware
 
 from redshot.entities import Asset, Position
+import secrets
+from fastapi import Request
+from fastapi.responses import JSONResponse
 from redshot.market_data import MarketResearcher
 from redshot.portfolio_manager import PortfolioManager
 from redshot.asset_advisor import AssetAdvisor
@@ -67,6 +70,49 @@ if os.path.isdir("frontend-dist"):
     @app.get("/")
     def serve_frontend() -> FileResponse:
         return FileResponse(index_path)
+
+# ----------------- Simple token-based authentication -----------------
+# The credentials can be configured via environment variables ADMIN_USERNAME and
+# ADMIN_PASSWORD.  If not provided, defaults to 'admin'/'password'.  Tokens are
+# generated for successful logins and stored in-memory for session management.
+ADMIN_USERNAME = os.environ.get("ADMIN_USERNAME", "admin")
+ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "password")
+
+active_tokens: set[str] = set()
+
+@app.post("/api/login")
+def login(payload: dict) -> dict:
+    """
+    Authenticate a user.  The payload must contain ``username`` and ``password``.
+    On success, a unique token is returned.  Clients must include this token
+    in the ``Authorization`` header for all subsequent API requests.
+    """
+    if not isinstance(payload, dict):
+        raise HTTPException(status_code=400, detail="Invalid payload")
+    username = payload.get("username")
+    password = payload.get("password")
+    if username != ADMIN_USERNAME or password != ADMIN_PASSWORD:
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+    token = secrets.token_hex(16)
+    active_tokens.add(token)
+    return {"token": token}
+
+@app.middleware("http")
+async def auth_middleware(request: Request, call_next):
+    """
+    Middleware to enforce authentication.  All API routes beginning with
+    `/api` require a valid token in the ``Authorization`` header, except
+    `/api/login` which is used to obtain a token.  Static files and the root
+    frontend are served without authentication.
+    """
+    path = request.url.path
+    # Only protect API routes
+    if path.startswith("/api") and path != "/api/login":
+        token = request.headers.get("Authorization")
+        if not token or token not in active_tokens:
+            return JSONResponse(status_code=401, content={"detail": "Unauthorized"})
+    response = await call_next(request)
+    return response
 
 # Initialise global objects
 researcher = MarketResearcher()
