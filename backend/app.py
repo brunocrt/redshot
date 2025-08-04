@@ -12,9 +12,10 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import List
+from typing import List, Optional
 
 from fastapi import FastAPI, HTTPException
+from fastapi import Path, Query
 from fastapi.middleware.cors import CORSMiddleware
 
 from redshot.entities import Asset, Position
@@ -108,6 +109,10 @@ supervisor = SystemSupervisor(
     advisor=advisor,
     broker=broker,
     interval_seconds=3600,
+    # Risk management parameters
+    max_risk_pct=0.02,
+    stop_loss_pct=0.05,
+    trailing_stop_pct=0.05,
 )
 
 
@@ -302,23 +307,147 @@ def get_strategy_details() -> list[dict]:
     for asset in assets:
         info = advisor.last_details.get(asset.code, None)
         if info is None:
-            # If no details recorded yet, return placeholders
-            details.append({
+            # If no details recorded yet, return placeholders.  Attempt to infer
+            # expected keys based on the first strategy's attributes.
+            strat = advisor.strategies[0] if advisor.strategies else None
+            placeholder = {
                 "asset": asset.code,
-                "window": None,
-                "average_price": None,
                 "current_price": None,
-                "delta": None,
-                "threshold": None,
                 "recommendation": None,
                 "timestamp": None,
-            })
+            }
+            # Include typical fields for EnhancedSMAStrategy
+            if hasattr(strat, "short_window"):
+                placeholder.update({
+                    "short_window": None,
+                    "long_window": None,
+                    "short_sma": None,
+                    "long_sma": None,
+                    "average_volume": None,
+                    "current_volume": None,
+                    "rsi": None,
+                    "threshold": getattr(strat, "threshold", None),
+                })
+            else:
+                # Fallback simple strategy keys
+                placeholder.update({
+                    "window": None,
+                    "average_price": None,
+                    "delta": None,
+                    "threshold": getattr(strat, "threshold", None) if strat else None,
+                })
+            details.append(placeholder)
         else:
             details.append({
                 "asset": asset.code,
                 **info,
             })
     return details
+
+
+@app.get("/api/strategy_params")
+def get_strategy_params() -> dict:
+    """
+    Return the current configuration of the first strategy (assumed to be
+    ``EnhancedSMAStrategy``).  Clients can use this endpoint to display
+    adjustable parameters to users.
+    """
+    strat = advisor.strategies[0] if advisor.strategies else None
+    if strat is None:
+        raise HTTPException(status_code=404, detail="No strategy configured")
+    # Extract numeric parameters that can be tuned
+    params = {}
+    for name in ("short_window", "long_window", "threshold", "volume_window", "rsi_period", "overbought", "oversold"):
+        if hasattr(strat, name):
+            params[name] = getattr(strat, name)
+    return params
+
+
+@app.post("/api/strategy_params")
+def set_strategy_params(payload: dict) -> dict:
+    """
+    Update the parameters of the first strategy.  Accepts a JSON payload
+    containing any subset of supported fields (short_window, long_window,
+    threshold, volume_window, rsi_period, overbought, oversold).  Values
+    should be numeric (int or float).  Returns the updated parameter set.
+    """
+    strat = advisor.strategies[0] if advisor.strategies else None
+    if strat is None:
+        raise HTTPException(status_code=404, detail="No strategy configured")
+    updated = {}
+    for name, value in payload.items():
+        if name in ("short_window", "long_window", "volume_window", "rsi_period"):
+            try:
+                ivalue = int(value)
+            except Exception:
+                raise HTTPException(status_code=400, detail=f"Invalid integer value for {name}")
+            setattr(strat, name, ivalue)
+            updated[name] = ivalue
+        elif name in ("threshold", "overbought", "oversold"):
+            try:
+                fvalue = float(value)
+            except Exception:
+                raise HTTPException(status_code=400, detail=f"Invalid float value for {name}")
+            setattr(strat, name, fvalue)
+            updated[name] = fvalue
+    # Recompute description to reflect new parameters
+    strat.description = (
+        f"Buy when price exceeds the {getattr(strat, 'short_window', '?')}-day SMA by more than"
+        f" {getattr(strat, 'threshold', 0.0)*100:.1f}% and volume is above average; sell when price falls"
+        f" below it by more than {getattr(strat, 'threshold', 0.0)*100:.1f}%. Additional filters: price must be above the"
+        f" {getattr(strat, 'long_window', '?')}-day SMA for buys, avoid buys near resistance, avoid sells near support,"
+        f" avoid buys when RSI>{getattr(strat, 'overbought', 0.0):.1f} and sells when RSI<{getattr(strat, 'oversold', 0.0):.1f}."
+    )
+    return updated
+
+
+@app.get("/api/strategy_series/{asset_code:path}")
+def get_strategy_series(
+    asset_code: str = Path(..., description="Asset code, e.g. BTC/USDT"),
+    days: int = Query(60, gt=1, le=365, description="Number of days of historical data"),
+) -> dict:
+    """
+    Return historical series for a given asset including closing prices and
+    moving averages used by the strategy.  This endpoint is intended for
+    charting in the frontend.  It computes short and long SMAs based on
+    the current strategy configuration.
+    """
+    # Find matching asset by code
+    asset_obj = next((a for a in assets if a.code.lower() == asset_code.lower()), None)
+    if asset_obj is None:
+        raise HTTPException(status_code=404, detail=f"Unknown asset {asset_code}")
+    # Get historical price/volume data
+    data = researcher.get_historical_data(asset_obj.market, days=days)
+    if not data:
+        raise HTTPException(status_code=500, detail="Failed to retrieve historical data")
+    prices = data.get("prices", [])
+    strat = advisor.strategies[0] if advisor.strategies else None
+    if strat is None:
+        raise HTTPException(status_code=500, detail="No strategy configured")
+    short_window = getattr(strat, "short_window", 7)
+    long_window = getattr(strat, "long_window", 50)
+    # Compute SMAs
+    short_sma_series: List[Optional[float]] = []
+    long_sma_series: List[Optional[float]] = []
+    for i in range(len(prices)):
+        if i + 1 < short_window:
+            short_sma_series.append(None)
+        else:
+            window_prices = prices[i + 1 - short_window : i + 1]
+            short_sma_series.append(sum(window_prices) / short_window)
+        if i + 1 < long_window:
+            long_sma_series.append(None)
+        else:
+            window_prices_long = prices[i + 1 - long_window : i + 1]
+            long_sma_series.append(sum(window_prices_long) / long_window)
+    # Build x axis labels as relative day offsets (e.g. -n .. 0)
+    x = list(range(-len(prices) + 1, 1))
+    return {
+        "x": x,
+        "prices": prices,
+        "short_sma": short_sma_series,
+        "long_sma": long_sma_series,
+    }
 
 
 @app.post("/api/initial_capital")

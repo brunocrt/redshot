@@ -245,3 +245,86 @@ class MarketResearcher:
         """
         # Return a shallow copy to prevent external mutation
         return {k: v.copy() for k, v in self.activity_log.items()}
+
+    #
+    # Volume and technical indicator helpers
+    #
+    def get_historical_data(
+        self, coin_id: str, days: int = 30, vs_currency: str = "usd"
+    ) -> Optional[Dict[str, List[float]]]:
+        """
+        Retrieve historical price and volume data for a coin.
+
+        This method wraps CoinGecko's `/coins/{id}/market_chart` endpoint to
+        obtain both price and volume series.  If CoinGecko returns an error
+        (e.g. HTTP 429 rate limit), the method falls back to Binance's
+        `/api/v3/klines` endpoint, which provides OHLC and volume data.  The
+        returned dictionary has two keys: ``prices`` (a list of closing prices)
+        and ``volumes`` (a list of volumes).  Both lists are ordered from
+        oldest to newest.  If data retrieval fails, ``None`` is returned.
+
+        :param coin_id: CoinGecko identifier of the asset
+        :param days: number of days of data to retrieve
+        :param vs_currency: fiat currency (unused for Binance fallback)
+        :returns: dict with ``prices`` and ``volumes`` lists or ``None`` on failure
+        """
+        timestamp = _current_timestamp()
+        provider: Optional[str] = None
+        result: Optional[Dict[str, List[float]]] = None
+        # Try CoinGecko first
+        endpoint = (
+            f"/coins/{coin_id}/market_chart?vs_currency={vs_currency}&days={days}&interval=daily"
+        )
+        url = self.base_url + endpoint
+        LOGGER.debug("Requesting historical price/volume data for %s via CoinGecko", coin_id)
+        try:
+            resp = self.session.get(url, timeout=10)
+            resp.raise_for_status()
+            data = resp.json()
+            price_entries = data.get("prices", [])
+            volume_entries = data.get("total_volumes", [])
+            prices = [entry[1] for entry in price_entries]
+            volumes = [entry[1] for entry in volume_entries]
+            if prices and volumes and len(prices) == len(volumes):
+                result = {"prices": prices, "volumes": volumes}
+                provider = "CoinGecko"
+        except Exception as exc:
+            LOGGER.warning(
+                "CoinGecko historical price/volume request failed for %s: %s", coin_id, exc
+            )
+        # Fallback to Binance if necessary
+        if result is None:
+            symbol = COINGECKO_ID_TO_BINANCE_SYMBOL.get(coin_id)
+            if symbol:
+                binance_url = (
+                    f"https://data-api.binance.vision/api/v3/klines?symbol={symbol}&interval=1d&limit={days}"
+                )
+                LOGGER.debug(
+                    "Requesting historical price/volume data for %s via Binance (%s)", coin_id, symbol
+                )
+                try:
+                    resp = requests.get(binance_url, timeout=10)
+                    resp.raise_for_status()
+                    data = resp.json()
+                    # Each kline entry: [openTime, open, high, low, close, volume, closeTime, ...]
+                    prices = [float(entry[4]) for entry in data]
+                    volumes = [float(entry[5]) for entry in data]
+                    result = {"prices": prices, "volumes": volumes}
+                    provider = "Binance"
+                except Exception as exc:
+                    LOGGER.error(
+                        "Failed to fetch historical price/volume data for %s from Binance: %s", coin_id, exc
+                    )
+            else:
+                LOGGER.warning(
+                    "No Binance symbol mapping for %s; unable to fetch historical data via fallback", coin_id
+                )
+        # Update activity log for volumes if result obtained
+        if result:
+            self.activity_log.setdefault(coin_id, {})["historical_full"] = {
+                "timestamp": timestamp,
+                "provider": provider,
+                "prices_count": len(result["prices"]),
+                "success": True,
+            }
+        return result

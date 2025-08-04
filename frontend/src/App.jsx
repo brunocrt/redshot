@@ -1,4 +1,27 @@
 import React, { useEffect, useState } from 'react';
+// Chart.js components for plotting strategy metrics
+import { Line } from 'react-chartjs-2';
+import {
+  Chart as ChartJS,
+  CategoryScale,
+  LinearScale,
+  PointElement,
+  LineElement,
+  Title,
+  Tooltip,
+  Legend,
+} from 'chart.js';
+
+// Register Chart.js components
+ChartJS.register(
+  CategoryScale,
+  LinearScale,
+  PointElement,
+  LineElement,
+  Title,
+  Tooltip,
+  Legend,
+);
 
 export default function App() {
   // Initialise portfolio with total_value, cash and positions.  Cash is set to 0
@@ -23,11 +46,70 @@ export default function App() {
   const [capitalInput, setCapitalInput] = useState('');
   const [loading, setLoading] = useState(false);
 
+  // Strategy parameter state and series data for charting
+  const [strategyParams, setStrategyParams] = useState({});
+  const [selectedAsset, setSelectedAsset] = useState('BTC/USDT');
+  const [seriesData, setSeriesData] = useState({ x: [], prices: [], short_sma: [], long_sma: [] });
+
+  // Track which section of the dashboard is currently active.  This controls
+  // which panel is displayed in the main content area.  Initial section
+  // defaults to 'status' to show the system status overview.
+  const [activeSection, setActiveSection] = useState('status');
+
   async function fetchPortfolio() {
     const res = await fetch('/api/portfolio');
     const data = await res.json();
     setPortfolio(data);
   }
+
+  async function fetchStrategyParams() {
+    try {
+      const res = await fetch('/api/strategy_params');
+      const data = await res.json();
+      setStrategyParams(data);
+    } catch (error) {
+      console.error('Failed to fetch strategy params', error);
+    }
+  }
+
+  async function fetchSeries(assetCode = selectedAsset) {
+    try {
+      const encoded = encodeURIComponent(assetCode);
+      const res = await fetch(`/api/strategy_series/${encoded}?days=60`);
+      const data = await res.json();
+      setSeriesData(data);
+    } catch (error) {
+      console.error('Failed to fetch series data', error);
+    }
+  }
+
+  // Apply updated strategy parameters
+  async function applyStrategyParams() {
+    try {
+      await fetch('/api/strategy_params', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(strategyParams),
+      });
+      // Refresh strategies and details
+      await fetchStrategies();
+      await fetchStrategyDetails();
+    } catch (error) {
+      console.error('Failed to update strategy parameters', error);
+    }
+  }
+
+  // Handle changes in parameter input
+  function handleParamChange(e, key) {
+    const value = e.target.value;
+    setStrategyParams((prev) => ({ ...prev, [key]: value }));
+  }
+
+  // Determine list of assets for selection (unique asset codes from recommendations or default)
+  const assetsList = Array.from(new Set(recommendations.map((r) => r.asset))).filter(Boolean);
+  // If no recommendations yet, fallback to known assets
+  const defaultAssets = ['BTC/USDT', 'ETH/USDT', 'BNB/USDT', 'ADA/USDT', 'XRP/USDT', 'SOL/USDT'];
+  const selectableAssets = assetsList.length > 0 ? assetsList : defaultAssets;
 
   async function fetchTrades() {
     const res = await fetch('/api/trades');
@@ -102,6 +184,8 @@ export default function App() {
     fetchStrategies();
     fetchTradePerformance();
     fetchStrategyDetails();
+    fetchStrategyParams();
+    fetchSeries();
   }, []);
 
   async function simulate() {
@@ -116,6 +200,8 @@ export default function App() {
       await fetchStrategies();
       await fetchTradePerformance();
       await fetchStrategyDetails();
+      await fetchStrategyParams();
+      await fetchSeries(selectedAsset);
     } catch (error) {
       console.error('Simulation failed', error);
     } finally {
@@ -133,351 +219,553 @@ export default function App() {
       : '—';
   }
 
+  // Render navigation bar on the left and the main content on the right.
+  // Each navigation item corresponds to a section of the dashboard.
   return (
-    <div className="container py-4">
-      <h1 className="mb-4">Redshot Dashboard</h1>
-      {/* Controls section: run simulation and set initial capital */}
-      <div className="d-flex flex-wrap align-items-end mb-3 gap-3">
-        <button
-          className="btn btn-primary"
-          onClick={simulate}
-          disabled={loading}
-        >
-          {loading ? 'Running...' : 'Run Simulation Cycle'}
-        </button>
-        <div className="input-group" style={{ maxWidth: '300px' }}>
-          <input
-            type="number"
-            className="form-control"
-            placeholder="Set initial capital"
-            value={capitalInput}
-            onChange={(e) => setCapitalInput(e.target.value)}
-            min="0"
-            step="0.01"
-          />
-          <button className="btn btn-secondary" onClick={setInitialCapital}>
-            Update Capital
-          </button>
-        </div>
-      </div>
-      <h2>System Status</h2>
-      <p>
-        Last Cycle:{' '}
-        <strong>{status.last_cycle ? new Date(status.last_cycle).toLocaleString() : '—'}</strong>
-      </p>
-      <p>
-        Initial Capital:{' '}
-        <strong>${formatNumber(status.initial_capital)}</strong>
-      </p>
-      <p>
-        Cash Balance:{' '}
-        <strong>${formatNumber(portfolio.cash)}</strong>
-      </p>
-      <p>
-        Positions Value:{' '}
-        <strong>${formatNumber(portfolio.total_value - portfolio.cash)}</strong>
-      </p>
-      <p>
-        Total Portfolio Value:{' '}
-        <strong>${formatNumber(portfolio.total_value)}</strong>
-      </p>
-      <p>
-        Variation (since last cycle):{' '}
-        <strong>{
-          typeof status.variation === 'number' && Number.isFinite(status.variation)
-            ? (status.variation * 100).toFixed(2) + '%'
-            : '—'
-        }</strong>
-      </p>
-      <p>
-        P&amp;L (overall):{' '}
-        <strong>{
-          typeof status.pnl === 'number' && Number.isFinite(status.pnl)
-            ? (status.pnl * 100).toFixed(2) + '%'
-            : '—'
-        }</strong>
-      </p>
-      <h2>Portfolio</h2>
-      <p>
-        Cash: <strong>${formatNumber(portfolio.cash)}</strong> | Positions Value:{' '}
-        <strong>${formatNumber(portfolio.total_value - portfolio.cash)}</strong>
-      </p>
-      <div className="table-responsive">
-        <table className="table table-dark table-striped table-bordered">
-          <thead>
-            <tr>
-              <th>Asset</th>
-              <th>Amount</th>
-              <th>Price</th>
-              <th>Value</th>
-            </tr>
-          </thead>
-          <tbody>
-            {portfolio.positions && portfolio.positions.length > 0 ? (
-              portfolio.positions.map((pos) => (
-                <tr key={pos.asset}>
-                  <td>{pos.asset}</td>
-                  <td>{formatNumber(pos.amount, 4)}</td>
-                  <td>{formatNumber(pos.price, 4)}</td>
-                  <td>{formatNumber(pos.value)}</td>
-                </tr>
-              ))
-            ) : (
-              <tr>
-                <td colSpan="4" className="text-center">
-                  No positions yet
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
-      </div>
-      <h2>Recommendations</h2>
-      <div className="table-responsive">
-        <table className="table table-dark table-striped table-bordered">
-          <thead>
-            <tr>
-              <th>Asset</th>
-              <th>Side</th>
-              <th>Price</th>
-              <th>Confidence</th>
-              <th>Time</th>
-            </tr>
-          </thead>
-          <tbody>
-            {recommendations && recommendations.length > 0 ? (
-              recommendations.map((rec, idx) => (
-                <tr key={idx}>
-                  <td>{rec.asset}</td>
-                  <td
-                    className={
-                      rec.side && rec.side.toLowerCase() === 'buy'
-                        ? 'text-success'
-                        : rec.side && rec.side.toLowerCase() === 'sell'
-                        ? 'text-danger'
-                        : ''
-                    }
-                  >
-                    {rec.side ? rec.side.toUpperCase() : '—'}
-                  </td>
-                  <td>{formatNumber(rec.price, 4)}</td>
-                  <td>{
-                    typeof rec.confidence === 'number' && Number.isFinite(rec.confidence)
-                      ? (rec.confidence * 100).toFixed(1) + '%'
+    <div className="container-fluid">
+      <div className="row">
+        {/* Sidebar navigation */}
+        <nav className="col-md-2 d-none d-md-block bg-dark sidebar py-4">
+          <div className="position-sticky">
+            <h4 className="text-light px-3 mb-4">Redshot</h4>
+            <ul className="nav nav-pills flex-column mb-auto">
+              <li className="nav-item">
+                <button className={`nav-link text-start ${activeSection === 'status' ? 'active' : ''}`} onClick={() => setActiveSection('status')}>
+                  System Status
+                </button>
+              </li>
+              <li className="nav-item">
+                <button className={`nav-link text-start ${activeSection === 'portfolio' ? 'active' : ''}`} onClick={() => setActiveSection('portfolio')}>
+                  Portfolio
+                </button>
+              </li>
+              <li className="nav-item">
+                <button className={`nav-link text-start ${activeSection === 'recommendations' ? 'active' : ''}`} onClick={() => setActiveSection('recommendations')}>
+                  Recommendations
+                </button>
+              </li>
+              <li className="nav-item">
+                <button className={`nav-link text-start ${activeSection === 'trades' ? 'active' : ''}`} onClick={() => setActiveSection('trades')}>
+                  Trades
+                </button>
+              </li>
+              <li className="nav-item">
+                <button className={`nav-link text-start ${activeSection === 'research' ? 'active' : ''}`} onClick={() => setActiveSection('research')}>
+                  Research & Strategy
+                </button>
+              </li>
+              <li className="nav-item">
+                <button className={`nav-link text-start ${activeSection === 'strategies' ? 'active' : ''}`} onClick={() => setActiveSection('strategies')}>
+                  Strategies
+                </button>
+              </li>
+              <li className="nav-item">
+                <button className={`nav-link text-start ${activeSection === 'strategy_details' ? 'active' : ''}`} onClick={() => setActiveSection('strategy_details')}>
+                  Strategy Details
+                </button>
+              </li>
+              <li className="nav-item">
+                <button className={`nav-link text-start ${activeSection === 'strategy_params' ? 'active' : ''}`} onClick={() => setActiveSection('strategy_params')}>
+                  Strategy Parameters
+                </button>
+              </li>
+              <li className="nav-item">
+                <button className={`nav-link text-start ${activeSection === 'strategy_chart' ? 'active' : ''}`} onClick={() => setActiveSection('strategy_chart')}>
+                  Strategy Chart
+                </button>
+              </li>
+            </ul>
+          </div>
+        </nav>
+        {/* Main content area */}
+        <main className="col-md-10 ms-sm-auto px-md-4">
+          <div className="pt-4">
+            <h1 className="mb-4">Redshot Dashboard</h1>
+            {/* Controls: run simulation and set capital */}
+            <div className="d-flex flex-wrap align-items-end mb-4 gap-3">
+              <button
+                className="btn btn-primary"
+                onClick={simulate}
+                disabled={loading}
+              >
+                {loading ? 'Running...' : 'Run Simulation Cycle'}
+              </button>
+              <div className="input-group" style={{ maxWidth: '300px' }}>
+                <input
+                  type="number"
+                  className="form-control"
+                  placeholder="Set initial capital"
+                  value={capitalInput}
+                  onChange={(e) => setCapitalInput(e.target.value)}
+                  min="0"
+                  step="0.01"
+                />
+                <button className="btn btn-secondary" onClick={setInitialCapital}>
+                  Update Capital
+                </button>
+              </div>
+            </div>
+            {/* Conditional sections */}
+            {activeSection === 'status' && (
+              <div>
+                <h2>System Status</h2>
+                <p>
+                  Last Cycle:{' '}
+                  <strong>{status.last_cycle ? new Date(status.last_cycle).toLocaleString() : '—'}</strong>
+                </p>
+                <p>
+                  Initial Capital:{' '}
+                  <strong>${formatNumber(status.initial_capital)}</strong>
+                </p>
+                <p>
+                  Cash Balance:{' '}
+                  <strong>${formatNumber(portfolio.cash)}</strong>
+                </p>
+                <p>
+                  Positions Value:{' '}
+                  <strong>${formatNumber(portfolio.total_value - portfolio.cash)}</strong>
+                </p>
+                <p>
+                  Total Portfolio Value:{' '}
+                  <strong>${formatNumber(portfolio.total_value)}</strong>
+                </p>
+                <p>
+                  Variation (since last cycle):{' '}
+                  <strong>{
+                    typeof status.variation === 'number' && Number.isFinite(status.variation)
+                      ? (status.variation * 100).toFixed(2) + '%'
                       : '—'
-                  }</td>
-                  <td>{rec.timestamp ? new Date(rec.timestamp).toLocaleString() : '—'}</td>
-                </tr>
-              ))
-            ) : (
-              <tr>
-                <td colSpan="5" className="text-center">
-                  No recommendations available
-                </td>
-              </tr>
+                  }</strong>
+                </p>
+                <p>
+                  P&amp;L (overall):{' '}
+                  <strong>{
+                    typeof status.pnl === 'number' && Number.isFinite(status.pnl)
+                      ? (status.pnl * 100).toFixed(2) + '%'
+                      : '—'
+                  }</strong>
+                </p>
+              </div>
             )}
-          </tbody>
-        </table>
-      </div>
-      <h2>Trades</h2>
-      <div className="table-responsive">
-        <table className="table table-dark table-striped table-bordered">
-          <thead>
-            <tr>
-              <th>Time</th>
-              <th>Exchange</th>
-              <th>Asset</th>
-              <th>Quantity</th>
-              <th>Price</th>
-              <th>Side</th>
-              <th>Current Price</th>
-              <th>P&amp;L</th>
-            </tr>
-          </thead>
-          <tbody>
-            {tradePerformance && tradePerformance.length > 0 ? (
-              tradePerformance.map((trade) => {
-                const pnl = trade.pnl_pct;
-                const pnlFormatted = typeof pnl === 'number' && Number.isFinite(pnl)
-                  ? pnl.toFixed(2) + '%'
-                  : '—';
-                return (
-                  <tr key={trade.id}>
-                    <td>{new Date(trade.timestamp).toLocaleString()}</td>
-                    <td>{trade.exchange}</td>
-                    <td>{trade.asset_code}</td>
-                    <td>{formatNumber(trade.quantity, 4)}</td>
-                    <td>{formatNumber(trade.price, 4)}</td>
-                    <td
-                      className={
-                        trade.side && trade.side.toLowerCase() === 'buy'
-                          ? 'text-success'
-                          : 'text-danger'
-                      }
-                    >
-                      {trade.side ? trade.side.toUpperCase() : '—'}
-                    </td>
-                    <td>{formatNumber(trade.current_price, 4)}</td>
-                    <td
-                      className={
-                        typeof pnl === 'number' && Number.isFinite(pnl)
-                          ? pnl >= 0
-                            ? 'text-success'
-                            : 'text-danger'
-                          : ''
-                      }
-                    >
-                      {pnlFormatted}
-                    </td>
-                  </tr>
-                );
-              })
-            ) : (
-              <tr>
-                <td colSpan="8" className="text-center">
-                  No trades recorded
-                </td>
-              </tr>
+            {activeSection === 'portfolio' && (
+              <div>
+                <h2>Portfolio</h2>
+                <p>
+                  Cash: <strong>${formatNumber(portfolio.cash)}</strong> | Positions Value:{' '}
+                  <strong>${formatNumber(portfolio.total_value - portfolio.cash)}</strong>
+                </p>
+                <div className="table-responsive">
+                  <table className="table table-dark table-striped table-bordered">
+                    <thead>
+                      <tr>
+                        <th>Asset</th>
+                        <th>Amount</th>
+                        <th>Price</th>
+                        <th>Value</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {portfolio.positions && portfolio.positions.length > 0 ? (
+                        portfolio.positions.map((pos) => (
+                          <tr key={pos.asset}>
+                            <td>{pos.asset}</td>
+                            <td>{formatNumber(pos.amount, 4)}</td>
+                            <td>{formatNumber(pos.price, 4)}</td>
+                            <td>{formatNumber(pos.value)}</td>
+                          </tr>
+                        ))
+                      ) : (
+                        <tr>
+                          <td colSpan="4" className="text-center">
+                            No positions yet
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
             )}
-          </tbody>
-        </table>
-      </div>
-
-      <h2>Market Research & Strategy Activity</h2>
-      <div className="table-responsive">
-        <table className="table table-dark table-striped table-bordered">
-          <thead>
-            <tr>
-              <th>Asset</th>
-              <th>Last Price Provider</th>
-              <th>Price</th>
-              <th>Price Timestamp</th>
-              <th>Historical Provider</th>
-              <th>Historical Timestamp</th>
-              <th>Strategy</th>
-            </tr>
-          </thead>
-          <tbody>
-            {researchActivity && researchActivity.length > 0 ? (
-              researchActivity.map((item, idx) => {
-                const priceInfo = item.price || {};
-                const histInfo = item.historical || {};
-                const strategy = item.strategy || {};
-                return (
-                  <tr key={idx}>
-                    <td>{item.asset}</td>
-                    <td>{priceInfo.provider || '—'}</td>
-                    <td>{
-                      typeof priceInfo.price === 'number' && Number.isFinite(priceInfo.price)
-                        ? priceInfo.price.toFixed(4)
-                        : '—'
-                    }</td>
-                    <td>{priceInfo.timestamp ? new Date(priceInfo.timestamp).toLocaleString() : '—'}</td>
-                    <td>{histInfo.provider || '—'}</td>
-                    <td>{histInfo.timestamp ? new Date(histInfo.timestamp).toLocaleString() : '—'}</td>
-                    <td>{strategy.name || '—'}</td>
-                  </tr>
-                );
-              })
-            ) : (
-              <tr>
-                <td colSpan="7" className="text-center">
-                  No research activity yet
-                </td>
-              </tr>
+            {activeSection === 'recommendations' && (
+              <div>
+                <h2>Recommendations</h2>
+                <div className="table-responsive">
+                  <table className="table table-dark table-striped table-bordered">
+                    <thead>
+                      <tr>
+                        <th>Asset</th>
+                        <th>Side</th>
+                        <th>Price</th>
+                        <th>Confidence</th>
+                        <th>Time</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {recommendations && recommendations.length > 0 ? (
+                        recommendations.map((rec, idx) => (
+                          <tr key={idx}>
+                            <td>{rec.asset}</td>
+                            <td
+                              className={
+                                rec.side && rec.side.toLowerCase() === 'buy'
+                                  ? 'text-success'
+                                  : rec.side && rec.side.toLowerCase() === 'sell'
+                                  ? 'text-danger'
+                                  : ''
+                              }
+                            >
+                              {rec.side ? rec.side.toUpperCase() : '—'}
+                            </td>
+                            <td>{formatNumber(rec.price, 4)}</td>
+                            <td>{
+                              typeof rec.confidence === 'number' && Number.isFinite(rec.confidence)
+                                ? (rec.confidence * 100).toFixed(1) + '%'
+                                : '—'
+                            }</td>
+                            <td>{rec.timestamp ? new Date(rec.timestamp).toLocaleString() : '—'}</td>
+                          </tr>
+                        ))
+                      ) : (
+                        <tr>
+                          <td colSpan="5" className="text-center">
+                            No recommendations available
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
             )}
-          </tbody>
-        </table>
-      </div>
-
-      {/* List configured strategies */}
-      <h2>Configured Strategies</h2>
-      <ul className="list-group mb-4">
-        {strategies && strategies.length > 0 ? (
-          strategies.map((strat, idx) => (
-            <li key={idx} className="list-group-item bg-dark text-light">
-              <strong>{strat.name}</strong>: {strat.description}
-              {strat.parameters && Object.keys(strat.parameters).length > 0 && (
-                <span>
-                  {' '}(parameters: {Object.entries(strat.parameters).map(([k, v]) => `${k}=${v}`).join(', ')})
-                </span>
-              )}
-            </li>
-          ))
-        ) : (
-          <li className="list-group-item bg-dark text-light">No strategies configured</li>
-        )}
-      </ul>
-
-      {/* Strategy details showing raw calculation data (e.g. moving averages) */}
-      <h2>Strategy Calculation Details</h2>
-      <div className="table-responsive">
-        <table className="table table-dark table-striped table-bordered">
-          <thead>
-            <tr>
-              <th>Asset</th>
-              <th>Window</th>
-              <th>Average Price</th>
-              <th>Current Price</th>
-              <th>Delta</th>
-              <th>Threshold</th>
-              <th>Recommendation</th>
-              <th>Timestamp</th>
-            </tr>
-          </thead>
-          <tbody>
-            {strategyDetails && strategyDetails.length > 0 ? (
-              strategyDetails.map((detail, idx) => {
-                const delta = detail.delta;
-                // Format delta as percentage
-                const deltaFmt = typeof delta === 'number' && Number.isFinite(delta)
-                  ? (delta * 100).toFixed(2) + '%'
-                  : '—';
-                const thresholdFmt = typeof detail.threshold === 'number' && Number.isFinite(detail.threshold)
-                  ? (detail.threshold * 100).toFixed(2) + '%'
-                  : '—';
-                return (
-                  <tr key={idx}>
-                    <td>{detail.asset}</td>
-                    <td>{detail.window !== null && detail.window !== undefined ? detail.window : '—'}</td>
-                    <td>{formatNumber(detail.average_price, 4)}</td>
-                    <td>{formatNumber(detail.current_price, 4)}</td>
-                    <td
-                      className={
-                        typeof delta === 'number' && Number.isFinite(delta)
-                          ? delta >= 0
-                            ? 'text-success'
-                            : 'text-danger'
-                          : ''
-                      }
-                    >
-                      {deltaFmt}
-                    </td>
-                    <td>{thresholdFmt}</td>
-                    <td
-                      className={
-                        detail.recommendation && detail.recommendation.toLowerCase() === 'buy'
-                          ? 'text-success'
-                          : detail.recommendation && detail.recommendation.toLowerCase() === 'sell'
-                          ? 'text-danger'
-                          : ''
-                      }
-                    >
-                      {detail.recommendation ? detail.recommendation.toUpperCase() : '—'}
-                    </td>
-                    <td>{detail.timestamp ? new Date(detail.timestamp).toLocaleString() : '—'}</td>
-                  </tr>
-                );
-              })
-            ) : (
-              <tr>
-                <td colSpan="8" className="text-center">
-                  No strategy details available
-                </td>
-              </tr>
+            {activeSection === 'trades' && (
+              <div>
+                <h2>Trades</h2>
+                <div className="table-responsive">
+                  <table className="table table-dark table-striped table-bordered">
+                    <thead>
+                      <tr>
+                        <th>Time</th>
+                        <th>Exchange</th>
+                        <th>Asset</th>
+                        <th>Quantity</th>
+                        <th>Price</th>
+                        <th>Side</th>
+                        <th>Current Price</th>
+                        <th>P&amp;L</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {tradePerformance && tradePerformance.length > 0 ? (
+                        tradePerformance.map((trade) => {
+                          const pnl = trade.pnl_pct;
+                          const pnlFormatted = typeof pnl === 'number' && Number.isFinite(pnl)
+                            ? pnl.toFixed(2) + '%'
+                            : '—';
+                          return (
+                            <tr key={trade.id}>
+                              <td>{new Date(trade.timestamp).toLocaleString()}</td>
+                              <td>{trade.exchange}</td>
+                              <td>{trade.asset_code}</td>
+                              <td>{formatNumber(trade.quantity, 4)}</td>
+                              <td>{formatNumber(trade.price, 4)}</td>
+                              <td
+                                className={
+                                  trade.side && trade.side.toLowerCase() === 'buy'
+                                    ? 'text-success'
+                                    : 'text-danger'
+                                }
+                              >
+                                {trade.side ? trade.side.toUpperCase() : '—'}
+                              </td>
+                              <td>{formatNumber(trade.current_price, 4)}</td>
+                              <td
+                                className={
+                                  typeof pnl === 'number' && Number.isFinite(pnl)
+                                    ? pnl >= 0
+                                      ? 'text-success'
+                                      : 'text-danger'
+                                    : ''
+                                }
+                              >
+                                {pnlFormatted}
+                              </td>
+                            </tr>
+                          );
+                        })
+                      ) : (
+                        <tr>
+                          <td colSpan="8" className="text-center">
+                            No trades recorded
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
             )}
-          </tbody>
-        </table>
+            {activeSection === 'research' && (
+              <div>
+                <h2>Market Research &amp; Strategy Activity</h2>
+                <div className="table-responsive">
+                  <table className="table table-dark table-striped table-bordered">
+                    <thead>
+                      <tr>
+                        <th>Asset</th>
+                        <th>Last Price Provider</th>
+                        <th>Price</th>
+                        <th>Price Timestamp</th>
+                        <th>Historical Provider</th>
+                        <th>Historical Timestamp</th>
+                        <th>Strategy</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {researchActivity && researchActivity.length > 0 ? (
+                        researchActivity.map((item, idx) => {
+                          const priceInfo = item.price || {};
+                          const histInfo = item.historical || {};
+                          const strategy = item.strategy || {};
+                          return (
+                            <tr key={idx}>
+                              <td>{item.asset}</td>
+                              <td>{priceInfo.provider || '—'}</td>
+                              <td>{
+                                typeof priceInfo.price === 'number' && Number.isFinite(priceInfo.price)
+                                  ? priceInfo.price.toFixed(4)
+                                  : '—'
+                              }</td>
+                              <td>{priceInfo.timestamp ? new Date(priceInfo.timestamp).toLocaleString() : '—'}</td>
+                              <td>{histInfo.provider || '—'}</td>
+                              <td>{histInfo.timestamp ? new Date(histInfo.timestamp).toLocaleString() : '—'}</td>
+                              <td>{strategy.name || '—'}</td>
+                            </tr>
+                          );
+                        })
+                      ) : (
+                        <tr>
+                          <td colSpan="7" className="text-center">
+                            No research activity yet
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+            {activeSection === 'strategies' && (
+              <div>
+                <h2>Configured Strategies</h2>
+                <ul className="list-group mb-4">
+                  {strategies && strategies.length > 0 ? (
+                    strategies.map((strat, idx) => (
+                      <li key={idx} className="list-group-item bg-dark text-light">
+                        <strong>{strat.name}</strong>: {strat.description}
+                        {strat.parameters && Object.keys(strat.parameters).length > 0 && (
+                          <span>
+                            {' '}(parameters: {Object.entries(strat.parameters).map(([k, v]) => `${k}=${v}`).join(', ')})
+                          </span>
+                        )}
+                      </li>
+                    ))
+                  ) : (
+                    <li className="list-group-item bg-dark text-light">No strategies configured</li>
+                  )}
+                </ul>
+              </div>
+            )}
+            {activeSection === 'strategy_details' && (
+              <div>
+                <h2>Strategy Calculation Details</h2>
+                <div className="table-responsive">
+                  <table className="table table-dark table-striped table-bordered">
+                    <thead>
+                      <tr>
+                        <th>Asset</th>
+                        <th>Short Window</th>
+                        <th>Long Window</th>
+                        <th>Short SMA</th>
+                        <th>Long SMA</th>
+                        <th>Avg Volume</th>
+                        <th>Current Volume</th>
+                        <th>RSI</th>
+                        <th>Threshold</th>
+                        <th>Recommendation</th>
+                        <th>Timestamp</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {strategyDetails && strategyDetails.length > 0 ? (
+                        strategyDetails.map((detail, idx) => {
+                          const isEnhanced = detail.hasOwnProperty('short_window');
+                          const thresholdVal = detail.threshold;
+                          const thresholdFmt = typeof thresholdVal === 'number' && Number.isFinite(thresholdVal)
+                            ? (thresholdVal * 100).toFixed(2) + '%'
+                            : '—';
+                          return (
+                            <tr key={idx}>
+                              <td>{detail.asset}</td>
+                              {isEnhanced ? (
+                                <>
+                                  <td>{detail.short_window ?? '—'}</td>
+                                  <td>{detail.long_window ?? '—'}</td>
+                                  <td>{formatNumber(detail.short_sma, 4)}</td>
+                                  <td>{formatNumber(detail.long_sma, 4)}</td>
+                                  <td>{formatNumber(detail.average_volume)}</td>
+                                  <td>{formatNumber(detail.current_volume)}</td>
+                                  <td>{detail.rsi !== null && detail.rsi !== undefined ? detail.rsi.toFixed(2) : '—'}</td>
+                                </>
+                              ) : (
+                                <>
+                                  <td>{detail.window ?? '—'}</td>
+                                  <td>—</td>
+                                  <td>{formatNumber(detail.average_price, 4)}</td>
+                                  <td>—</td>
+                                  <td>—</td>
+                                  <td>—</td>
+                                  <td>{detail.delta !== null && detail.delta !== undefined ? (detail.delta * 100).toFixed(2) + '%' : '—'}</td>
+                                </>
+                              )}
+                              <td>{thresholdFmt}</td>
+                              <td
+                                className={
+                                  detail.recommendation && detail.recommendation.toLowerCase() === 'buy'
+                                    ? 'text-success'
+                                    : detail.recommendation && detail.recommendation.toLowerCase() === 'sell'
+                                    ? 'text-danger'
+                                    : ''
+                                }
+                              >
+                                {detail.recommendation ? detail.recommendation.toUpperCase() : '—'}
+                              </td>
+                              <td>{detail.timestamp ? new Date(detail.timestamp).toLocaleString() : '—'}</td>
+                            </tr>
+                          );
+                        })
+                      ) : (
+                        <tr>
+                          <td colSpan="11" className="text-center">
+                            No strategy details available
+                          </td>
+                        </tr>
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+            {activeSection === 'strategy_params' && (
+              <div>
+                <h2>Strategy Parameters</h2>
+                <div className="row mb-3">
+                  {Object.keys(strategyParams).map((key) => (
+                    <div className="col-6 col-md-3 mb-2" key={key}>
+                      <label className="form-label text-capitalize" htmlFor={key}>{key.replace('_', ' ')}</label>
+                      <input
+                        id={key}
+                        type="number"
+                        className="form-control"
+                        value={strategyParams[key]}
+                        onChange={(e) => handleParamChange(e, key)}
+                      />
+                    </div>
+                  ))}
+                  <div className="col-12 mt-2">
+                    <button className="btn btn-secondary" onClick={applyStrategyParams}>Apply Strategy Parameters</button>
+                  </div>
+                </div>
+              </div>
+            )}
+            {activeSection === 'strategy_chart' && (
+              <div>
+                <h2>Strategy Series Chart</h2>
+                <div className="mb-3">
+                  <label htmlFor="assetSelect" className="form-label">Select Asset:</label>
+                  <select
+                    id="assetSelect"
+                    className="form-select"
+                    value={selectedAsset}
+                    onChange={(e) => {
+                      const asset = e.target.value;
+                      setSelectedAsset(asset);
+                      fetchSeries(asset);
+                    }}
+                  >
+                    {selectableAssets.map((asset) => (
+                      <option key={asset} value={asset}>{asset}</option>
+                    ))}
+                  </select>
+                </div>
+                <div className="chart-container" style={{ position: 'relative', height: '400px' }}>
+                  <Line
+                    data={{
+                      labels: seriesData.x,
+                      datasets: [
+                        {
+                          label: 'Price',
+                          data: seriesData.prices,
+                          borderColor: 'rgba(75, 192, 192, 1)',
+                          backgroundColor: 'rgba(75, 192, 192, 0.2)',
+                          tension: 0.1,
+                        },
+                        {
+                          label: 'Short SMA',
+                          data: seriesData.short_sma,
+                          borderColor: 'rgba(255, 99, 132, 1)',
+                          backgroundColor: 'rgba(255, 99, 132, 0.2)',
+                          tension: 0.1,
+                        },
+                        {
+                          label: 'Long SMA',
+                          data: seriesData.long_sma,
+                          borderColor: 'rgba(54, 162, 235, 1)',
+                          backgroundColor: 'rgba(54, 162, 235, 0.2)',
+                          tension: 0.1,
+                        },
+                      ],
+                    }}
+                    options={{
+                      responsive: true,
+                      maintainAspectRatio: false,
+                      plugins: {
+                        legend: {
+                          position: 'top',
+                          labels: { color: 'rgba(255,255,255,0.9)' },
+                        },
+                        title: {
+                          display: false,
+                        },
+                        tooltip: {
+                          mode: 'index',
+                          intersect: false,
+                        },
+                      },
+                      scales: {
+                        x: {
+                          ticks: { color: 'rgba(255,255,255,0.9)' },
+                          title: {
+                            display: true,
+                            text: 'Days (oldest to newest)',
+                            color: 'rgba(255,255,255,0.9)',
+                          },
+                        },
+                        y: {
+                          ticks: { color: 'rgba(255,255,255,0.9)' },
+                          title: {
+                            display: true,
+                            text: 'Price',
+                            color: 'rgba(255,255,255,0.9)',
+                          },
+                        },
+                      },
+                    }}
+                  />
+                </div>
+              </div>
+            )}
+          </div>
+        </main>
       </div>
     </div>
   );
