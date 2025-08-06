@@ -69,7 +69,12 @@ export default function App() {
   // Track which section of the dashboard is currently active.  This controls
   // which panel is displayed in the main content area.  Initial section
   // defaults to 'status' to show the system status overview.
-  const [activeSection, setActiveSection] = useState('status');
+  const [activeSection, setActiveSection] = useState('portfolio');
+
+  // State to control collapsing of the sidebar.  When true, the sidebar is
+  // hidden on medium and larger screens.  A hamburger button in the top
+  // navbar toggles this state.
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
   async function fetchPortfolio() {
     const res = await authFetch('/api/portfolio');
@@ -335,9 +340,14 @@ export default function App() {
   // decimals but can be overridden.  This helper is used throughout the
   // component to consistently format portfolio values, prices and quantities.
   function formatNumber(value, decimals = 2) {
-    return typeof value === 'number' && Number.isFinite(value)
-      ? value.toFixed(decimals)
-      : '—';
+    if (typeof value === 'number' && Number.isFinite(value)) {
+      const formatter = new Intl.NumberFormat('en-US', {
+        minimumFractionDigits: decimals,
+        maximumFractionDigits: decimals,
+      });
+      return formatter.format(value);
+    }
+    return '—';
   }
 
   // Helper for formatting ISO timestamps into the user's local timezone.  The
@@ -348,7 +358,15 @@ export default function App() {
   function formatDateTime(isoString) {
     if (!isoString) return '—';
     try {
-      const date = new Date(isoString);
+      // Append 'Z' if the ISO string does not specify a timezone.  This
+      // ensures that naive timestamps originating from the backend are
+      // interpreted as UTC before converting to the user's timezone.  Without
+      // the trailing 'Z', JavaScript treats the string as local time.
+      let toParse = isoString;
+      if (isoString && !isoString.endsWith('Z')) {
+        toParse = isoString + 'Z';
+      }
+      const date = new Date(toParse);
       return date.toLocaleString('en-US', { timeZone: NY_TIME_ZONE });
     } catch {
       return '—';
@@ -395,18 +413,23 @@ export default function App() {
   // Each navigation item corresponds to a section of the dashboard.
   return (
     <div className="container-fluid">
-      {/* Top navigation bar containing the brand and a system status link */}
+      {/* Top navigation bar containing a hamburger toggler and brand.  The
+          toggler collapses or expands the sidebar on medium+ screens. */}
       <nav className="navbar navbar-expand-lg navbar-dark bg-dark mb-3">
-        <div className="container-fluid">
-          <a className="navbar-brand" href="#" onClick={() => setActiveSection('status')}>Redshot</a>
-          <button className="btn btn-outline-light" type="button" onClick={() => setActiveSection('status')}>
-            System Status
+        <div className="container-fluid d-flex align-items-center">
+          <button
+            className="btn btn-dark me-2"
+            type="button"
+            onClick={() => setSidebarCollapsed((prev) => !prev)}
+          >
+            &#9776;
           </button>
+          <span className="navbar-brand mb-0 h1">Redshot</span>
         </div>
       </nav>
       <div className="row">
         {/* Sidebar navigation */}
-        <nav className="col-md-2 d-none d-md-block bg-dark sidebar py-4">
+        <nav className={`col-md-2 bg-dark sidebar py-4 ${sidebarCollapsed ? 'd-md-none' : 'd-none d-md-block'}`}>
           <div className="position-sticky">
             <h4 className="text-light px-3 mb-4">Redshot</h4>
             <ul className="nav nav-pills flex-column mb-auto">
@@ -481,48 +504,65 @@ export default function App() {
                 </button>
               </div>
             </div>
+
+            {/* Compact system status table.  Display key metrics in a single
+                horizontal row with smaller font.  This table is always
+                visible below the controls to provide at-a-glance status. */}
+            <div className="table-responsive mb-4">
+              <table className="table table-dark table-bordered table-sm mb-0">
+                <thead>
+                  <tr className="small">
+                    <th>Last Cycle</th>
+                    <th>Initial Capital</th>
+                    <th>Cash</th>
+                    <th>Positions Value</th>
+                    <th>Total Value</th>
+                    <th>Variation</th>
+                    <th>P&amp;L</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr className="small">
+                    <td>{formatDateTime(status.last_cycle)}</td>
+                    <td>${formatNumber(status.initial_capital)}</td>
+                    <td>${formatNumber(portfolio.cash)}</td>
+                    <td>${formatNumber(portfolio.total_value - portfolio.cash)}</td>
+                    <td>${formatNumber(portfolio.total_value)}</td>
+                    <td
+                      className={
+                        typeof status.variation === 'number' && Number.isFinite(status.variation)
+                          ? status.variation >= 0
+                            ? 'text-success'
+                            : 'text-danger'
+                          : ''
+                      }
+                    >
+                      {
+                        typeof status.variation === 'number' && Number.isFinite(status.variation)
+                          ? (status.variation * 100).toFixed(2) + '%'
+                          : '—'
+                      }
+                    </td>
+                    <td
+                      className={
+                        typeof status.pnl === 'number' && Number.isFinite(status.pnl)
+                          ? status.pnl >= 0
+                            ? 'text-success'
+                            : 'text-danger'
+                          : ''
+                      }
+                    >
+                      {
+                        typeof status.pnl === 'number' && Number.isFinite(status.pnl)
+                          ? (status.pnl * 100).toFixed(2) + '%'
+                          : '—'
+                      }
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
             {/* Conditional sections */}
-            {activeSection === 'status' && (
-              <div>
-                <h2>System Status</h2>
-                <p>
-                  Last Cycle:{' '}
-                  <strong>{formatDateTime(status.last_cycle)}</strong>
-                </p>
-                <p>
-                  Initial Capital:{' '}
-                  <strong>${formatNumber(status.initial_capital)}</strong>
-                </p>
-                <p>
-                  Cash Balance:{' '}
-                  <strong>${formatNumber(portfolio.cash)}</strong>
-                </p>
-                <p>
-                  Positions Value:{' '}
-                  <strong>${formatNumber(portfolio.total_value - portfolio.cash)}</strong>
-                </p>
-                <p>
-                  Total Portfolio Value:{' '}
-                  <strong>${formatNumber(portfolio.total_value)}</strong>
-                </p>
-                <p>
-                  Variation (since last cycle):{' '}
-                  <strong>{
-                    typeof status.variation === 'number' && Number.isFinite(status.variation)
-                      ? (status.variation * 100).toFixed(2) + '%'
-                      : '—'
-                  }</strong>
-                </p>
-                <p>
-                  P&amp;L (overall):{' '}
-                  <strong>{
-                    typeof status.pnl === 'number' && Number.isFinite(status.pnl)
-                      ? (status.pnl * 100).toFixed(2) + '%'
-                      : '—'
-                  }</strong>
-                </p>
-              </div>
-            )}
             {activeSection === 'portfolio' && (
               <div>
                 <h2>Portfolio</h2>
