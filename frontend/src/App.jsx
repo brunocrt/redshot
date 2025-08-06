@@ -284,18 +284,9 @@ export default function App() {
       // Clear login form
       setLoginUsername('');
       setLoginPassword('');
-      // Load data after login
-      fetchPortfolio();
-      fetchTrades();
-      fetchRecommendations();
-      fetchStatus();
-      fetchResearchActivity();
-      fetchStrategies();
-      fetchTradePerformance();
-      fetchStrategyDetails();
-      fetchStrategyParams();
-      fetchSeries();
-      fetchSimulationInterval();
+      // Do not load data immediately here; the useEffect hook will run
+      // automatically when isAuthenticated becomes true, ensuring that
+      // requests include the freshly set token.
     } catch (error) {
       console.error('Login failed', error);
     }
