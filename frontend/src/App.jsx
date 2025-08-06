@@ -57,8 +57,12 @@ export default function App() {
   // Authentication token and login state.  The token is persisted in
   // localStorage so that the session survives page reloads.  Login form
   // values are stored in dedicated states.
-  const [token, setToken] = useState(() => localStorage.getItem('token') || '');
-  const [isAuthenticated, setIsAuthenticated] = useState(() => Boolean(localStorage.getItem('token')));
+  // Authentication token and login state.  Tokens are kept in local state and
+  // are not automatically restored from localStorage.  This ensures the
+  // application always starts with a login prompt.  Upon successful login
+  // the token is stored in state and can be optionally persisted if desired.
+  const [token, setToken] = useState('');
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [loginUsername, setLoginUsername] = useState('');
   const [loginPassword, setLoginPassword] = useState('');
 
@@ -68,14 +72,14 @@ export default function App() {
   const [activeSection, setActiveSection] = useState('status');
 
   async function fetchPortfolio() {
-    const res = await fetch('/api/portfolio', { headers: { Authorization: token } });
+    const res = await authFetch('/api/portfolio');
     const data = await res.json();
     setPortfolio(data);
   }
 
   async function fetchStrategyParams() {
     try {
-      const res = await fetch('/api/strategy_params', { headers: { Authorization: token } });
+      const res = await authFetch('/api/strategy_params');
       const data = await res.json();
       setStrategyParams(data);
     } catch (error) {
@@ -86,7 +90,7 @@ export default function App() {
   async function fetchSeries(assetCode = selectedAsset) {
     try {
       const encoded = encodeURIComponent(assetCode);
-      const res = await fetch(`/api/strategy_series/${encoded}?days=60`, { headers: { Authorization: token } });
+      const res = await authFetch(`/api/strategy_series/${encoded}?days=60`);
       const data = await res.json();
       setSeriesData(data);
     } catch (error) {
@@ -97,7 +101,7 @@ export default function App() {
   // Fetch the current simulation interval from the server
   async function fetchSimulationInterval() {
     try {
-      const res = await fetch('/api/simulation_interval', { headers: { Authorization: token } });
+      const res = await authFetch('/api/simulation_interval');
       const data = await res.json();
       setSimulationInterval(data.minutes);
     } catch (error) {
@@ -114,9 +118,9 @@ export default function App() {
       return;
     }
     try {
-      await fetch('/api/simulation_interval', {
+      await authFetch('/api/simulation_interval', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: token },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ minutes: value }),
       });
       await fetchSimulationInterval();
@@ -129,9 +133,9 @@ export default function App() {
   // Apply updated strategy parameters
   async function applyStrategyParams() {
     try {
-      await fetch('/api/strategy_params', {
+      await authFetch('/api/strategy_params', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: token },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(strategyParams),
       });
       // Refresh strategies and details
@@ -155,43 +159,43 @@ export default function App() {
   const selectableAssets = assetsList.length > 0 ? assetsList : defaultAssets;
 
   async function fetchTrades() {
-    const res = await fetch('/api/trades', { headers: { Authorization: token } });
+    const res = await authFetch('/api/trades');
     const data = await res.json();
     setTrades(data);
   }
 
   async function fetchRecommendations() {
-    const res = await fetch('/api/recommendations', { headers: { Authorization: token } });
+    const res = await authFetch('/api/recommendations');
     const data = await res.json();
     setRecommendations(data);
   }
 
   async function fetchStatus() {
-    const res = await fetch('/api/status', { headers: { Authorization: token } });
+    const res = await authFetch('/api/status');
     const data = await res.json();
     setStatus(data);
   }
 
   async function fetchResearchActivity() {
-    const res = await fetch('/api/research_activity', { headers: { Authorization: token } });
+    const res = await authFetch('/api/research_activity');
     const data = await res.json();
     setResearchActivity(data);
   }
 
   async function fetchStrategies() {
-    const res = await fetch('/api/strategies', { headers: { Authorization: token } });
+    const res = await authFetch('/api/strategies');
     const data = await res.json();
     setStrategies(data);
   }
 
   async function fetchTradePerformance() {
-    const res = await fetch('/api/trade_performance', { headers: { Authorization: token } });
+    const res = await authFetch('/api/trade_performance');
     const data = await res.json();
     setTradePerformance(data);
   }
 
   async function fetchStrategyDetails() {
-    const res = await fetch('/api/strategy_details', { headers: { Authorization: token } });
+    const res = await authFetch('/api/strategy_details');
     const data = await res.json();
     setStrategyDetails(data);
   }
@@ -204,9 +208,9 @@ export default function App() {
       return;
     }
     try {
-      await fetch('/api/initial_capital', {
+      await authFetch('/api/initial_capital', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: token },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ capital: value }),
       });
       // Reload relevant data after setting capital
@@ -240,7 +244,7 @@ export default function App() {
   async function simulate() {
     setLoading(true);
     try {
-      await fetch('/api/simulate', { method: 'POST', headers: { Authorization: token } });
+      await authFetch('/api/simulate', { method: 'POST' });
       await fetchPortfolio();
       await fetchTrades();
       await fetchRecommendations();
@@ -273,7 +277,8 @@ export default function App() {
         return;
       }
       const data = await res.json();
-      localStorage.setItem('token', data.token);
+      // Save the returned token in state; do not persist in localStorage to
+      // enforce login on each page load.
       setToken(data.token);
       setIsAuthenticated(true);
       // Clear login form
@@ -300,7 +305,6 @@ export default function App() {
   // clears loaded data.  This simply sets isAuthenticated to false so that
   // the login form is shown again.
   function handleLogout() {
-    localStorage.removeItem('token');
     setToken('');
     setIsAuthenticated(false);
     // Clear cached data on logout
@@ -316,6 +320,25 @@ export default function App() {
     setSeriesData({ x: [], prices: [], short_sma: [], long_sma: [] });
   }
 
+  // Perform an authenticated fetch.  Adds the Authorization header when a
+  // token is present.  If a request returns 401 Unauthorized, the user is
+  // automatically logged out and an error is thrown.  This helper ensures
+  // stale tokens are not persisted across container restarts and that
+  // application state remains consistent.
+  async function authFetch(url, options = {}) {
+    const opts = { ...options };
+    opts.headers = { ...(options.headers || {}) };
+    if (token) {
+      opts.headers['Authorization'] = token;
+    }
+    const res = await fetch(url, opts);
+    if (res.status === 401) {
+      handleLogout();
+      throw new Error('Unauthorized');
+    }
+    return res;
+  }
+
   // Helper for formatting numeric values.  If the value is not a finite
   // number, an em dash is returned instead.  The default precision is two
   // decimals but can be overridden.  This helper is used throughout the
@@ -324,6 +347,21 @@ export default function App() {
     return typeof value === 'number' && Number.isFinite(value)
       ? value.toFixed(decimals)
       : '—';
+  }
+
+  // Helper for formatting ISO timestamps into the user's local timezone.  The
+  // user's location (New York) is used explicitly so that times match the
+  // expected timezone rather than UTC.  If the input is falsy, an em dash
+  // is returned.
+  const NY_TIME_ZONE = 'America/New_York';
+  function formatDateTime(isoString) {
+    if (!isoString) return '—';
+    try {
+      const date = new Date(isoString);
+      return date.toLocaleString('en-US', { timeZone: NY_TIME_ZONE });
+    } catch {
+      return '—';
+    }
   }
 
   // If the user is not authenticated, display a login form instead of the dashboard.
@@ -366,17 +404,21 @@ export default function App() {
   // Each navigation item corresponds to a section of the dashboard.
   return (
     <div className="container-fluid">
+      {/* Top navigation bar containing the brand and a system status link */}
+      <nav className="navbar navbar-expand-lg navbar-dark bg-dark mb-3">
+        <div className="container-fluid">
+          <a className="navbar-brand" href="#" onClick={() => setActiveSection('status')}>Redshot</a>
+          <button className="btn btn-outline-light" type="button" onClick={() => setActiveSection('status')}>
+            System Status
+          </button>
+        </div>
+      </nav>
       <div className="row">
         {/* Sidebar navigation */}
         <nav className="col-md-2 d-none d-md-block bg-dark sidebar py-4">
           <div className="position-sticky">
             <h4 className="text-light px-3 mb-4">Redshot</h4>
             <ul className="nav nav-pills flex-column mb-auto">
-              <li className="nav-item">
-                <button className={`nav-link text-start ${activeSection === 'status' ? 'active' : ''}`} onClick={() => setActiveSection('status')}>
-                  System Status
-                </button>
-              </li>
               <li className="nav-item">
                 <button className={`nav-link text-start ${activeSection === 'portfolio' ? 'active' : ''}`} onClick={() => setActiveSection('portfolio')}>
                   Portfolio
@@ -398,18 +440,8 @@ export default function App() {
                 </button>
               </li>
               <li className="nav-item">
-                <button className={`nav-link text-start ${activeSection === 'strategies' ? 'active' : ''}`} onClick={() => setActiveSection('strategies')}>
-                  Strategies
-                </button>
-              </li>
-              <li className="nav-item">
-                <button className={`nav-link text-start ${activeSection === 'strategy_details' ? 'active' : ''}`} onClick={() => setActiveSection('strategy_details')}>
-                  Strategy Details
-                </button>
-              </li>
-              <li className="nav-item">
-                <button className={`nav-link text-start ${activeSection === 'strategy_params' ? 'active' : ''}`} onClick={() => setActiveSection('strategy_params')}>
-                  Strategy Parameters
+                <button className={`nav-link text-start ${activeSection === 'strategy' ? 'active' : ''}`} onClick={() => setActiveSection('strategy')}>
+                  Strategy
                 </button>
               </li>
               <li className="nav-item">
@@ -464,7 +496,7 @@ export default function App() {
                 <h2>System Status</h2>
                 <p>
                   Last Cycle:{' '}
-                  <strong>{status.last_cycle ? new Date(status.last_cycle).toLocaleString() : '—'}</strong>
+                  <strong>{formatDateTime(status.last_cycle)}</strong>
                 </p>
                 <p>
                   Initial Capital:{' '}
@@ -575,7 +607,7 @@ export default function App() {
                                 ? (rec.confidence * 100).toFixed(1) + '%'
                                 : '—'
                             }</td>
-                            <td>{rec.timestamp ? new Date(rec.timestamp).toLocaleString() : '—'}</td>
+                            <td>{formatDateTime(rec.timestamp)}</td>
                           </tr>
                         ))
                       ) : (
@@ -616,7 +648,7 @@ export default function App() {
                             : '—';
                           return (
                             <tr key={trade.id}>
-                              <td>{new Date(trade.timestamp).toLocaleString()}</td>
+                              <td>{formatDateTime(trade.timestamp)}</td>
                               <td>{trade.exchange}</td>
                               <td>{trade.asset_code}</td>
                               <td>{formatNumber(trade.quantity, 4)}</td>
@@ -688,9 +720,9 @@ export default function App() {
                                   ? priceInfo.price.toFixed(4)
                                   : '—'
                               }</td>
-                              <td>{priceInfo.timestamp ? new Date(priceInfo.timestamp).toLocaleString() : '—'}</td>
+                              <td>{formatDateTime(priceInfo.timestamp)}</td>
                               <td>{histInfo.provider || '—'}</td>
-                              <td>{histInfo.timestamp ? new Date(histInfo.timestamp).toLocaleString() : '—'}</td>
+                              <td>{formatDateTime(histInfo.timestamp)}</td>
                               <td>{strategy.name || '—'}</td>
                             </tr>
                           );
@@ -707,9 +739,11 @@ export default function App() {
                 </div>
               </div>
             )}
-            {activeSection === 'strategies' && (
+            {activeSection === 'strategy' && (
               <div>
-                <h2>Configured Strategies</h2>
+                <h2>Strategy</h2>
+                {/* Configured strategies list */}
+                <h3>Configured Strategies</h3>
                 <ul className="list-group mb-4">
                   {strategies && strategies.length > 0 ? (
                     strategies.map((strat, idx) => (
@@ -726,12 +760,9 @@ export default function App() {
                     <li className="list-group-item bg-dark text-light">No strategies configured</li>
                   )}
                 </ul>
-              </div>
-            )}
-            {activeSection === 'strategy_details' && (
-              <div>
-                <h2>Strategy Calculation Details</h2>
-                <div className="table-responsive">
+                {/* Strategy calculation details */}
+                <h3>Strategy Calculation Details</h3>
+                <div className="table-responsive mb-4">
                   <table className="table table-dark table-hover table-striped table-bordered">
                     <thead>
                       <tr>
@@ -792,7 +823,7 @@ export default function App() {
                               >
                                 {detail.recommendation ? detail.recommendation.toUpperCase() : '—'}
                               </td>
-                              <td>{detail.timestamp ? new Date(detail.timestamp).toLocaleString() : '—'}</td>
+                              <td>{formatDateTime(detail.timestamp)}</td>
                             </tr>
                           );
                         })
@@ -806,11 +837,8 @@ export default function App() {
                     </tbody>
                   </table>
                 </div>
-              </div>
-            )}
-            {activeSection === 'strategy_params' && (
-              <div>
-                <h2>Strategy Parameters</h2>
+                {/* Strategy parameter adjustment */}
+                <h3>Strategy Parameters</h3>
                 <div className="row mb-3">
                   {Object.keys(strategyParams).map((key) => (
                     <div className="col-6 col-md-3 mb-2" key={key}>
@@ -851,69 +879,98 @@ export default function App() {
                   </select>
                 </div>
                 <div className="chart-container" style={{ position: 'relative', height: '400px' }}>
-                  <Line
-                    data={{
-                      labels: seriesData.x,
-                      datasets: [
-                        {
-                          label: 'Price',
-                          data: seriesData.prices,
-                          borderColor: 'rgba(75, 192, 192, 1)',
-                          backgroundColor: 'rgba(75, 192, 192, 0.2)',
-                          tension: 0.1,
-                        },
-                        {
-                          label: 'Short SMA',
-                          data: seriesData.short_sma,
-                          borderColor: 'rgba(255, 99, 132, 1)',
-                          backgroundColor: 'rgba(255, 99, 132, 0.2)',
-                          tension: 0.1,
-                        },
-                        {
-                          label: 'Long SMA',
-                          data: seriesData.long_sma,
-                          borderColor: 'rgba(54, 162, 235, 1)',
-                          backgroundColor: 'rgba(54, 162, 235, 0.2)',
-                          tension: 0.1,
-                        },
-                      ],
-                    }}
-                    options={{
-                      responsive: true,
-                      maintainAspectRatio: false,
-                      plugins: {
-                        legend: {
-                          position: 'top',
-                          labels: { color: 'rgba(255,255,255,0.9)' },
-                        },
-                        title: {
-                          display: false,
-                        },
-                        tooltip: {
-                          mode: 'index',
-                          intersect: false,
-                        },
+                  {(() => {
+                    // Compute threshold bands based on the short SMA and strategy threshold.
+                    const threshold = parseFloat(strategyParams.threshold);
+                    const hasThreshold = !isNaN(threshold);
+                    const upper = hasThreshold
+                      ? seriesData.short_sma.map((v) => (v != null ? v * (1 + threshold) : null))
+                      : [];
+                    const lower = hasThreshold
+                      ? seriesData.short_sma.map((v) => (v != null ? v * (1 - threshold) : null))
+                      : [];
+                    const datasets = [
+                      {
+                        label: 'Price',
+                        data: seriesData.prices,
+                        borderColor: 'rgba(75, 192, 192, 1)',
+                        backgroundColor: 'rgba(75, 192, 192, 0.2)',
+                        tension: 0.1,
                       },
-                      scales: {
-                        x: {
-                          ticks: { color: 'rgba(255,255,255,0.9)' },
-                          title: {
-                            display: true,
-                            text: 'Days (oldest to newest)',
-                            color: 'rgba(255,255,255,0.9)',
-                          },
-                        },
-                        y: {
-                          ticks: { color: 'rgba(255,255,255,0.9)' },
-                          title: {
-                            display: true,
-                            text: 'Price',
-                            color: 'rgba(255,255,255,0.9)',
-                          },
-                        },
+                      {
+                        label: 'Short SMA',
+                        data: seriesData.short_sma,
+                        borderColor: 'rgba(255, 99, 132, 1)',
+                        backgroundColor: 'rgba(255, 99, 132, 0.2)',
+                        tension: 0.1,
                       },
-                    }}
-                  />
+                      {
+                        label: 'Long SMA',
+                        data: seriesData.long_sma,
+                        borderColor: 'rgba(54, 162, 235, 1)',
+                        backgroundColor: 'rgba(54, 162, 235, 0.2)',
+                        tension: 0.1,
+                      },
+                    ];
+                    if (hasThreshold) {
+                      datasets.push({
+                        label: 'Upper Threshold',
+                        data: upper,
+                        borderColor: 'rgba(255, 206, 86, 1)',
+                        backgroundColor: 'rgba(255, 206, 86, 0.2)',
+                        borderDash: [5, 5],
+                        tension: 0.1,
+                      });
+                      datasets.push({
+                        label: 'Lower Threshold',
+                        data: lower,
+                        borderColor: 'rgba(153, 102, 255, 1)',
+                        backgroundColor: 'rgba(153, 102, 255, 0.2)',
+                        borderDash: [5, 5],
+                        tension: 0.1,
+                      });
+                    }
+                    return (
+                      <Line
+                        data={{ labels: seriesData.x, datasets }}
+                        options={{
+                          responsive: true,
+                          maintainAspectRatio: false,
+                          plugins: {
+                            legend: {
+                              position: 'top',
+                              labels: { color: 'rgba(255,255,255,0.9)' },
+                            },
+                            title: {
+                              display: false,
+                            },
+                            tooltip: {
+                              mode: 'index',
+                              intersect: false,
+                            },
+                          },
+                          scales: {
+                            x: {
+                              ticks: { color: 'rgba(255,255,255,0.9)' },
+                              title: {
+                                display: true,
+                                text: 'Days (oldest to newest)',
+                                color: 'rgba(255,255,255,0.9)',
+                              },
+                            },
+                            y: {
+                              ticks: { color: 'rgba(255,255,255,0.9)' },
+                              title: {
+                                display: true,
+                                text: 'Price',
+                                color: 'rgba(255,255,255,0.9)',
+                              },
+                            },
+                          },
+                        }}
+                      />
+                    );
+                  })()}
                 </div>
               </div>
             )}
