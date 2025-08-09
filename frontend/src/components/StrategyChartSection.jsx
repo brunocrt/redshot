@@ -1,124 +1,101 @@
+// frontend/src/components/StrategyChartSection.jsx
 import React from 'react';
 import { Line } from 'react-chartjs-2';
+import {
+  Chart as ChartJS,
+  CategoryScale,
+  LinearScale,
+  PointElement,
+  LineElement,
+  Title,
+  Tooltip,
+  Legend,
+} from 'chart.js';
 
-/**
- * Strategy chart section.  Allows selection of an asset and displays a
- * multi-series chart with price, short and long SMAs and optional threshold
- * bands.  The ``seriesData`` prop contains arrays of x labels, prices,
- * short_sma and long_sma.  ``strategyParams.threshold`` is used to compute
- * threshold bands when provided.
- */
+// Ensure Chart.js is registered even if App.jsx doesn’t do it
+ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Title, Tooltip, Legend);
+
 export default function StrategyChartSection({
+  assetsList,
   selectedAsset,
   setSelectedAsset,
-  selectableAssets,
-  seriesData,
-  strategyParams,
-  fetchSeries,
+  seriesData,         // { x:[], prices:[], short_sma:[], long_sma:[] }
+  strategyParams      // { threshold?: number, ... }
 }) {
-  // Compute threshold bands when threshold is numeric
-  const threshold = parseFloat(strategyParams.threshold);
-  const hasThreshold = !isNaN(threshold);
-  const upper = hasThreshold
-    ? seriesData.short_sma.map((v) => (v != null ? v * (1 + threshold) : null))
-    : [];
-  const lower = hasThreshold
-    ? seriesData.short_sma.map((v) => (v != null ? v * (1 - threshold) : null))
-    : [];
-  const datasets = [
-    {
-      label: 'Price',
-      data: seriesData.prices,
-      borderColor: 'rgba(75, 192, 192, 1)',
-      backgroundColor: 'rgba(75, 192, 192, 0.2)',
-      tension: 0.1,
-    },
-    {
-      label: 'Short SMA',
-      data: seriesData.short_sma,
-      borderColor: 'rgba(255, 99, 132, 1)',
-      backgroundColor: 'rgba(255, 99, 132, 0.2)',
-      tension: 0.1,
-    },
-    {
-      label: 'Long SMA',
-      data: seriesData.long_sma,
-      borderColor: 'rgba(54, 162, 235, 1)',
-      backgroundColor: 'rgba(54, 162, 235, 0.2)',
-      tension: 0.1,
-    },
-  ];
-  if (hasThreshold) {
-    datasets.push({
-      label: 'Upper Threshold',
-      data: upper,
-      borderColor: 'rgba(255, 206, 86, 1)',
-      backgroundColor: 'rgba(255, 206, 86, 0.2)',
-      borderDash: [5, 5],
-      tension: 0.1,
-    });
-    datasets.push({
-      label: 'Lower Threshold',
-      data: lower,
-      borderColor: 'rgba(153, 102, 255, 1)',
-      backgroundColor: 'rgba(153, 102, 255, 0.2)',
-      borderDash: [5, 5],
-      tension: 0.1,
-    });
+  const labels = Array.isArray(seriesData?.x) ? seriesData.x : [];
+  const prices = Array.isArray(seriesData?.prices) ? seriesData.prices : [];
+  const shortSMA = Array.isArray(seriesData?.short_sma) ? seriesData.short_sma : [];
+  const longSMA  = Array.isArray(seriesData?.long_sma) ? seriesData.long_sma : [];
+
+  // Compute threshold bands if we have a numeric threshold AND short SMA
+  let upperBand = [];
+  let lowerBand = [];
+  if (typeof strategyParams?.threshold === 'number' && shortSMA.length) {
+    const th = strategyParams.threshold; // e.g. 0.02 for 2%
+    upperBand = shortSMA.map(v => (Number.isFinite(v) ? v * (1 + th) : null));
+    lowerBand = shortSMA.map(v => (Number.isFinite(v) ? v * (1 - th) : null));
+  } else {
+    // Keep arrays aligned with labels but null so they don’t render
+    upperBand = labels.map(() => null);
+    lowerBand = labels.map(() => null);
   }
+
+  const data = {
+    labels,
+    datasets: [
+      { label: 'Price', data: prices, borderWidth: 2, pointRadius: 0 },
+      { label: 'Short SMA', data: shortSMA, borderWidth: 2, pointRadius: 0 },
+      { label: 'Long SMA', data: longSMA, borderWidth: 2, pointRadius: 0 },
+      {
+        label: 'Upper Threshold',
+        data: upperBand,
+        borderWidth: 1,
+        borderDash: [6, 6],
+        pointRadius: 0,
+      },
+      {
+        label: 'Lower Threshold',
+        data: lowerBand,
+        borderWidth: 1,
+        borderDash: [6, 6],
+        pointRadius: 0,
+      },
+    ],
+  };
+
+  const options = {
+    responsive: true,
+    interaction: { mode: 'index', intersect: false },
+    plugins: {
+      legend: { position: 'top' },
+      title: { display: true, text: `Strategy Series: ${selectedAsset}` },
+      tooltip: { intersect: false },
+    },
+    elements: { line: { tension: 0.1 } },
+    scales: {
+      x: { ticks: { maxTicksLimit: 10 } },
+      y: { ticks: { callback: v => v } },
+    },
+  };
+
   return (
     <div>
       <h2>Strategy Series Chart</h2>
-      <div className="mb-3">
-        <label htmlFor="assetSelect" className="form-label">
-          Select Asset:
-        </label>
+      <div className="mb-3" style={{ maxWidth: 300 }}>
+        <label className="form-label">Asset</label>
         <select
-          id="assetSelect"
           className="form-select"
           value={selectedAsset}
-          onChange={(e) => {
-            const asset = e.target.value;
-            setSelectedAsset(asset);
-            fetchSeries(asset);
-          }}
+          onChange={e => setSelectedAsset(e.target.value)}
         >
-          {selectableAssets.map((asset) => (
-            <option key={asset} value={asset}>
-              {asset}
-            </option>
+          {assetsList.map(a => (
+            <option key={a} value={a}>{a}</option>
           ))}
         </select>
       </div>
-      <div className="chart-container" style={{ position: 'relative', height: '400px' }}>
-        <Line
-          data={{ labels: seriesData.x, datasets }}
-          options={{
-            responsive: true,
-            maintainAspectRatio: false,
-            plugins: {
-              legend: {
-                position: 'top',
-                labels: { color: 'rgba(255,255,255,0.9)' },
-              },
-              title: {
-                display: false,
-              },
-              tooltip: {
-                mode: 'index',
-                intersect: false,
-              },
-            },
-            scales: {
-              x: {
-                ticks: { color: 'rgba(255,255,255,0.9)' },
-              },
-              y: {
-                ticks: { color: 'rgba(255,255,255,0.9)' },
-              },
-            },
-          }}
-        />
+
+      <div className="chart-container" style={{ position: 'relative', height: 400 }}>
+        <Line data={data} options={options} />
       </div>
     </div>
   );
