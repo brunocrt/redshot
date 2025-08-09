@@ -169,14 +169,31 @@ supervisor = SystemSupervisor(
 # endpoint.  The thread reads this variable on each loop to respect changes.
 simulation_interval_seconds = int(os.environ.get("SIMULATION_INTERVAL_SECONDS", 1800))
 
+# Event used to wake up the periodic simulation thread when the interval changes.
+_simulation_wakeup = threading.Event()
+
+
 def periodic_simulation_loop() -> None:
-    """Background thread that runs supervisor cycles at a configurable interval."""
+    """
+    Background thread that runs supervisor cycles at a configurable interval.
+
+    Unlike a simple ``time.sleep()`` loop, this function waits on an event
+    with a timeout equal to the current ``simulation_interval_seconds``.  When
+    the interval is updated via the ``/api/simulation_interval`` endpoint, the
+    event is set so the thread wakes up immediately, reevaluates the new
+    interval and continues waiting.  This ensures that changes take effect
+    without having to wait for the previous sleep period to elapse.
+    """
     from datetime import datetime
     global simulation_interval_seconds
     while True:
         try:
-            # Sleep for the configured interval
-            time.sleep(simulation_interval_seconds)
+            # Wait for the configured interval or until woken by an update.
+            _simulation_wakeup.wait(timeout=simulation_interval_seconds)
+            # Clear the event so that future interval updates will wake the
+            # thread again.  This is safe even if the event was not set (it
+            # returns immediately).
+            _simulation_wakeup.clear()
             # Perform a simulation cycle
             prev_value = portfolio_manager.compute_portfolio_value()
             supervisor.run_once()
@@ -579,4 +596,6 @@ def set_simulation_interval(payload: dict) -> dict:
     if minutes <= 0:
         raise HTTPException(status_code=400, detail="Interval must be greater than zero")
     simulation_interval_seconds = int(minutes * 60)
+    # Wake up the background thread so the new interval takes effect immediately
+    _simulation_wakeup.set()
     return {"minutes": minutes}

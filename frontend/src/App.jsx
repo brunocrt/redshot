@@ -1,37 +1,24 @@
-import React, { useEffect, useState } from 'react';
-// Chart.js components for plotting strategy metrics
-import { Line } from 'react-chartjs-2';
-import {
-  Chart as ChartJS,
-  CategoryScale,
-  LinearScale,
-  PointElement,
-  LineElement,
-  Title,
-  Tooltip,
-  Legend,
-} from 'chart.js';
+import React, { useEffect, useState, useRef } from 'react';
+// Import child components for modular UI
+import LoginPage from './components/LoginPage';
+import Sidebar from './components/Sidebar';
+import StatusBar from './components/StatusBar';
+import PortfolioSection from './components/PortfolioSection';
+import RecommendationsSection from './components/RecommendationsSection';
+import TradesSection from './components/TradesSection';
+import ResearchSection from './components/ResearchSection';
+import StrategySection from './components/StrategySection';
+import StrategyChartSection from './components/StrategyChartSection';
+import SimulationSettingsSection from './components/SimulationSettingsSection';
 
-// Register Chart.js components
-ChartJS.register(
-  CategoryScale,
-  LinearScale,
-  PointElement,
-  LineElement,
-  Title,
-  Tooltip,
-  Legend,
-);
+// Constants
+const NY_TIME_ZONE = 'America/New_York';
 
 export default function App() {
-  // Initialise portfolio with total_value, cash and positions.  Cash is set to 0
-  // initially and will be updated via the API.
+  // State hooks for data returned from API
   const [portfolio, setPortfolio] = useState({ total_value: 0, cash: 0, positions: [] });
   const [trades, setTrades] = useState([]);
   const [recommendations, setRecommendations] = useState([]);
-  // Status includes fields from the /api/status endpoint, including last_cycle,
-  // portfolio_value, variation, pnl and initial_capital.  Initialise them to
-  // sensible defaults.
   const [status, setStatus] = useState({
     last_cycle: null,
     portfolio_value: null,
@@ -43,284 +30,41 @@ export default function App() {
   const [strategies, setStrategies] = useState([]);
   const [tradePerformance, setTradePerformance] = useState([]);
   const [strategyDetails, setStrategyDetails] = useState([]);
+  const [strategyParams, setStrategyParams] = useState({});
+  const [seriesData, setSeriesData] = useState({ x: [], prices: [], short_sma: [], long_sma: [] });
+  const [selectedAsset, setSelectedAsset] = useState('BTC/USDT');
+  const [simulationInterval, setSimulationInterval] = useState(null);
   const [capitalInput, setCapitalInput] = useState('');
+  const [intervalInput, setIntervalInput] = useState('');
   const [loading, setLoading] = useState(false);
 
-  // Strategy parameter state and series data for charting
-  const [strategyParams, setStrategyParams] = useState({});
-  const [selectedAsset, setSelectedAsset] = useState('BTC/USDT');
-  const [seriesData, setSeriesData] = useState({ x: [], prices: [], short_sma: [], long_sma: [] });
-  // Simulation interval in minutes and input value for updates
-  const [simulationInterval, setSimulationInterval] = useState(null);
-  const [intervalInput, setIntervalInput] = useState('');
+  // Toast notifications
+  const [toasts, setToasts] = useState([]);
+  function addToast(message) {
+    const id = Date.now();
+    setToasts((prev) => [...prev, { id, message }]);
+    setTimeout(() => {
+      setToasts((prev) => prev.filter((t) => t.id !== id));
+    }, 5000);
+  }
 
-  // Authentication token and login state.  The token is persisted in
-  // localStorage so that the session survives page reloads.  Login form
-  // values are stored in dedicated states.
-  // Authentication token and login state.  Tokens are kept in local state and
-  // are not automatically restored from localStorage.  This ensures the
-  // application always starts with a login prompt.  Upon successful login
-  // the token is stored in state and can be optionally persisted if desired.
+  // Refs to track previous values for change detection
+  const prevStatusRef = useRef({ last_cycle: null });
+  const prevTradesLenRef = useRef(0);
+  const prevPortfolioValueRef = useRef(0);
+
+  // Authentication state
   const [token, setToken] = useState('');
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [loginUsername, setLoginUsername] = useState('');
   const [loginPassword, setLoginPassword] = useState('');
 
-  // Track which section of the dashboard is currently active.  This controls
-  // which panel is displayed in the main content area.  Initial section
-  // defaults to 'status' to show the system status overview.
+  // Active section and sidebar collapse state
   const [activeSection, setActiveSection] = useState('portfolio');
-
-  // State to control collapsing of the sidebar.  When true, the sidebar is
-  // hidden on medium and larger screens.  A hamburger button in the top
-  // navbar toggles this state.
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
-  async function fetchPortfolio() {
-    const res = await authFetch('/api/portfolio');
-    const data = await res.json();
-    setPortfolio(data);
-  }
-
-  async function fetchStrategyParams() {
-    try {
-      const res = await authFetch('/api/strategy_params');
-      const data = await res.json();
-      setStrategyParams(data);
-    } catch (error) {
-      console.error('Failed to fetch strategy params', error);
-    }
-  }
-
-  async function fetchSeries(assetCode = selectedAsset) {
-    try {
-      const encoded = encodeURIComponent(assetCode);
-      const res = await authFetch(`/api/strategy_series/${encoded}?days=60`);
-      const data = await res.json();
-      setSeriesData(data);
-    } catch (error) {
-      console.error('Failed to fetch series data', error);
-    }
-  }
-
-  // Fetch the current simulation interval from the server
-  async function fetchSimulationInterval() {
-    try {
-      const res = await authFetch('/api/simulation_interval');
-      const data = await res.json();
-      setSimulationInterval(data.minutes);
-    } catch (error) {
-      console.error('Failed to fetch simulation interval', error);
-    }
-  }
-
-  // Update the simulation interval on the server
-  async function updateSimulationInterval() {
-    if (!intervalInput) return;
-    const value = parseFloat(intervalInput);
-    if (isNaN(value) || value <= 0) {
-      alert('Please enter a valid positive number of minutes');
-      return;
-    }
-    try {
-      await authFetch('/api/simulation_interval', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ minutes: value }),
-      });
-      await fetchSimulationInterval();
-      setIntervalInput('');
-    } catch (error) {
-      console.error('Failed to update simulation interval', error);
-    }
-  }
-
-  // Apply updated strategy parameters
-  async function applyStrategyParams() {
-    try {
-      await authFetch('/api/strategy_params', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(strategyParams),
-      });
-      // Refresh strategies and details
-      await fetchStrategies();
-      await fetchStrategyDetails();
-    } catch (error) {
-      console.error('Failed to update strategy parameters', error);
-    }
-  }
-
-  // Handle changes in parameter input
-  function handleParamChange(e, key) {
-    const value = e.target.value;
-    setStrategyParams((prev) => ({ ...prev, [key]: value }));
-  }
-
-  // Determine list of assets for selection (unique asset codes from recommendations or default)
-  const assetsList = Array.from(new Set(recommendations.map((r) => r.asset))).filter(Boolean);
-  // If no recommendations yet, fallback to known assets
-  const defaultAssets = ['BTC/USDT', 'ETH/USDT', 'BNB/USDT', 'ADA/USDT', 'XRP/USDT', 'SOL/USDT'];
-  const selectableAssets = assetsList.length > 0 ? assetsList : defaultAssets;
-
-  async function fetchTrades() {
-    const res = await authFetch('/api/trades');
-    const data = await res.json();
-    setTrades(data);
-  }
-
-  async function fetchRecommendations() {
-    const res = await authFetch('/api/recommendations');
-    const data = await res.json();
-    setRecommendations(data);
-  }
-
-  async function fetchStatus() {
-    const res = await authFetch('/api/status');
-    const data = await res.json();
-    setStatus(data);
-  }
-
-  async function fetchResearchActivity() {
-    const res = await authFetch('/api/research_activity');
-    const data = await res.json();
-    setResearchActivity(data);
-  }
-
-  async function fetchStrategies() {
-    const res = await authFetch('/api/strategies');
-    const data = await res.json();
-    setStrategies(data);
-  }
-
-  async function fetchTradePerformance() {
-    const res = await authFetch('/api/trade_performance');
-    const data = await res.json();
-    setTradePerformance(data);
-  }
-
-  async function fetchStrategyDetails() {
-    const res = await authFetch('/api/strategy_details');
-    const data = await res.json();
-    setStrategyDetails(data);
-  }
-
-  async function setInitialCapital() {
-    if (!capitalInput) return;
-    const value = parseFloat(capitalInput);
-    if (isNaN(value) || value < 0) {
-      alert('Please enter a valid non-negative number');
-      return;
-    }
-    try {
-      await authFetch('/api/initial_capital', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ capital: value }),
-      });
-      // Reload relevant data after setting capital
-      await fetchStatus();
-      await fetchPortfolio();
-      setCapitalInput('');
-    } catch (error) {
-      console.error('Failed to set initial capital', error);
-    }
-  }
-
-  // Fetch data after the user has authenticated.  This effect depends on
-  // ``isAuthenticated`` so that it only fires once a token is available.  It
-  // reloads data whenever the selected asset changes to update the chart.
-  useEffect(() => {
-    if (!isAuthenticated) return;
-    fetchPortfolio();
-    fetchTrades();
-    fetchRecommendations();
-    fetchStatus();
-    fetchResearchActivity();
-    fetchStrategies();
-    fetchTradePerformance();
-    fetchStrategyDetails();
-    fetchStrategyParams();
-    fetchSeries(selectedAsset);
-    fetchSimulationInterval();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isAuthenticated, selectedAsset]);
-
-  async function simulate() {
-    setLoading(true);
-    try {
-      await authFetch('/api/simulate', { method: 'POST' });
-      await fetchPortfolio();
-      await fetchTrades();
-      await fetchRecommendations();
-      await fetchStatus();
-      await fetchResearchActivity();
-      await fetchStrategies();
-      await fetchTradePerformance();
-      await fetchStrategyDetails();
-      await fetchStrategyParams();
-      await fetchSeries(selectedAsset);
-    } catch (error) {
-      console.error('Simulation failed', error);
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  // Handle user login.  Submits credentials to the API and stores the returned
-  // token on success.  After authentication, initial data is loaded.
-  async function handleLogin(e) {
-    e.preventDefault();
-    try {
-      const res = await fetch('/api/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username: loginUsername, password: loginPassword }),
-      });
-      if (!res.ok) {
-        alert('Invalid credentials');
-        return;
-      }
-      const data = await res.json();
-      // Save the returned token in state; do not persist in localStorage to
-      // enforce login on each page load.
-      setToken(data.token);
-      setIsAuthenticated(true);
-      // Clear login form
-      setLoginUsername('');
-      setLoginPassword('');
-      // Do not load data immediately here; the useEffect hook will run
-      // automatically when isAuthenticated becomes true, ensuring that
-      // requests include the freshly set token.
-    } catch (error) {
-      console.error('Login failed', error);
-    }
-  }
-
-  // Handle user logout.  Clears the stored token, resets auth state and
-  // clears loaded data.  This simply sets isAuthenticated to false so that
-  // the login form is shown again.
-  function handleLogout() {
-    setToken('');
-    setIsAuthenticated(false);
-    // Clear cached data on logout
-    setPortfolio({ total_value: 0, cash: 0, positions: [] });
-    setTrades([]);
-    setRecommendations([]);
-    setStatus({ last_cycle: null, portfolio_value: null, variation: null, pnl: null, initial_capital: null });
-    setResearchActivity([]);
-    setStrategies([]);
-    setTradePerformance([]);
-    setStrategyDetails([]);
-    setStrategyParams({});
-    setSeriesData({ x: [], prices: [], short_sma: [], long_sma: [] });
-  }
-
-  // Perform an authenticated fetch.  Adds the Authorization header when a
-  // token is present.  If a request returns 401 Unauthorized, the user is
-  // automatically logged out and an error is thrown.  This helper ensures
-  // stale tokens are not persisted across container restarts and that
-  // application state remains consistent.
+  /** Helper: perform an authenticated fetch.  If the response status is 401,
+   *  the user will be logged out and an error thrown. */
   async function authFetch(url, options = {}) {
     const opts = { ...options };
     opts.headers = { ...(options.headers || {}) };
@@ -335,10 +79,241 @@ export default function App() {
     return res;
   }
 
-  // Helper for formatting numeric values.  If the value is not a finite
-  // number, an em dash is returned instead.  The default precision is two
-  // decimals but can be overridden.  This helper is used throughout the
-  // component to consistently format portfolio values, prices and quantities.
+  // Fetch individual endpoints
+  async function fetchPortfolio() {
+    const res = await authFetch('/api/portfolio');
+    setPortfolio(await res.json());
+  }
+  async function fetchTrades() {
+    const res = await authFetch('/api/trades');
+    setTrades(await res.json());
+  }
+  async function fetchRecommendations() {
+    const res = await authFetch('/api/recommendations');
+    setRecommendations(await res.json());
+  }
+  async function fetchStatus() {
+    const res = await authFetch('/api/status');
+    setStatus(await res.json());
+  }
+  async function fetchResearchActivity() {
+    const res = await authFetch('/api/research_activity');
+    setResearchActivity(await res.json());
+  }
+  async function fetchStrategies() {
+    const res = await authFetch('/api/strategies');
+    setStrategies(await res.json());
+  }
+  async function fetchTradePerformance() {
+    const res = await authFetch('/api/trade_performance');
+    setTradePerformance(await res.json());
+  }
+  async function fetchStrategyDetails() {
+    const res = await authFetch('/api/strategy_details');
+    setStrategyDetails(await res.json());
+  }
+  async function fetchStrategyParams() {
+    const res = await authFetch('/api/strategy_params');
+    setStrategyParams(await res.json());
+  }
+  async function fetchSeries(asset = selectedAsset) {
+    const encoded = encodeURIComponent(asset);
+    const res = await authFetch(`/api/strategy_series/${encoded}?days=60`);
+    setSeriesData(await res.json());
+  }
+  async function fetchSimulationInterval() {
+    const res = await authFetch('/api/simulation_interval');
+    const data = await res.json();
+    setSimulationInterval(data.minutes);
+  }
+
+  async function updateSimulationInterval() {
+    if (!intervalInput) return;
+    const value = parseFloat(intervalInput);
+    if (isNaN(value) || value <= 0) {
+      alert('Please enter a valid positive number of minutes');
+      return;
+    }
+    await authFetch('/api/simulation_interval', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ minutes: value }),
+    });
+    setIntervalInput('');
+    await fetchSimulationInterval();
+  }
+
+  async function applyStrategyParams() {
+    await authFetch('/api/strategy_params', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(strategyParams),
+    });
+    await fetchStrategies();
+    await fetchStrategyDetails();
+  }
+
+  function handleParamChange(e, key) {
+    const value = e.target.value;
+    setStrategyParams((prev) => ({ ...prev, [key]: value }));
+  }
+
+  async function setInitialCapital() {
+    if (!capitalInput) return;
+    const value = parseFloat(capitalInput);
+    if (isNaN(value) || value < 0) {
+      alert('Please enter a valid non-negative number');
+      return;
+    }
+    await authFetch('/api/initial_capital', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ capital: value }),
+    });
+    setCapitalInput('');
+    await fetchStatus();
+    await fetchPortfolio();
+  }
+
+  // Consolidated refresh function
+  async function refreshAllData() {
+    try {
+      const encoded = encodeURIComponent(selectedAsset);
+      const [portfolioRes, tradesRes, recsRes, statusRes, researchRes, strategiesRes, tradePerfRes, detailsRes, paramsRes, seriesRes, intervalRes] =
+        await Promise.all([
+          authFetch('/api/portfolio'),
+          authFetch('/api/trades'),
+          authFetch('/api/recommendations'),
+          authFetch('/api/status'),
+          authFetch('/api/research_activity'),
+          authFetch('/api/strategies'),
+          authFetch('/api/trade_performance'),
+          authFetch('/api/strategy_details'),
+          authFetch('/api/strategy_params'),
+          authFetch(`/api/strategy_series/${encoded}?days=60`),
+          authFetch('/api/simulation_interval'),
+        ]);
+      const [
+        portfolioData,
+        tradesData,
+        recsData,
+        statusData,
+        researchData,
+        strategiesData,
+        tradePerfData,
+        detailsData,
+        paramsData,
+        seriesDataResp,
+        intervalData,
+      ] = await Promise.all([
+        portfolioRes.json(),
+        tradesRes.json(),
+        recsRes.json(),
+        statusRes.json(),
+        researchRes.json(),
+        strategiesRes.json(),
+        tradePerfRes.json(),
+        detailsRes.json(),
+        paramsRes.json(),
+        seriesRes.json(),
+        intervalRes.json(),
+      ]);
+      setPortfolio(portfolioData);
+      setTrades(tradesData);
+      setRecommendations(recsData);
+      setStatus(statusData);
+      setResearchActivity(researchData);
+      setStrategies(strategiesData);
+      setTradePerformance(tradePerfData);
+      setStrategyDetails(detailsData);
+      setStrategyParams(paramsData);
+      setSeriesData(seriesDataResp);
+      setSimulationInterval(intervalData.minutes);
+      // Toast notifications
+      if (statusData && statusData.last_cycle && statusData.last_cycle !== prevStatusRef.current.last_cycle) {
+        if (prevStatusRef.current.last_cycle) {
+          addToast('Simulation cycle completed');
+        }
+        prevStatusRef.current.last_cycle = statusData.last_cycle;
+      }
+      if (Array.isArray(tradePerfData) && tradePerfData.length > prevTradesLenRef.current) {
+        if (prevTradesLenRef.current > 0) {
+          addToast('New trade executed');
+        }
+        prevTradesLenRef.current = tradePerfData.length;
+      }
+      if (portfolioData && typeof portfolioData.total_value === 'number' && Number.isFinite(portfolioData.total_value)) {
+        if (prevPortfolioValueRef.current > 0 && portfolioData.total_value !== prevPortfolioValueRef.current) {
+          addToast('Portfolio updated');
+        }
+        prevPortfolioValueRef.current = portfolioData.total_value;
+      }
+    } catch (error) {
+      console.error('Failed to refresh dashboard data', error);
+    }
+  }
+
+  // Polling effect: refresh data every minute when authenticated
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    refreshAllData();
+    const id = setInterval(() => {
+      refreshAllData();
+    }, 60000);
+    return () => clearInterval(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isAuthenticated, selectedAsset]);
+
+  async function simulate() {
+    setLoading(true);
+    try {
+      await authFetch('/api/simulate', { method: 'POST' });
+      await refreshAllData();
+    } catch (err) {
+      console.error('Simulation failed', err);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleLogin(e) {
+    e.preventDefault();
+    try {
+      const res = await fetch('/api/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: loginUsername, password: loginPassword }),
+      });
+      if (!res.ok) {
+        alert('Invalid credentials');
+        return;
+      }
+      const data = await res.json();
+      setToken(data.token);
+      setIsAuthenticated(true);
+      setLoginUsername('');
+      setLoginPassword('');
+    } catch (err) {
+      console.error('Login failed', err);
+    }
+  }
+
+  function handleLogout() {
+    setToken('');
+    setIsAuthenticated(false);
+    setPortfolio({ total_value: 0, cash: 0, positions: [] });
+    setTrades([]);
+    setRecommendations([]);
+    setStatus({ last_cycle: null, portfolio_value: null, variation: null, pnl: null, initial_capital: null });
+    setResearchActivity([]);
+    setStrategies([]);
+    setTradePerformance([]);
+    setStrategyDetails([]);
+    setStrategyParams({});
+    setSeriesData({ x: [], prices: [], short_sma: [], long_sma: [] });
+  }
+
+  // Helper formatting functions
   function formatNumber(value, decimals = 2) {
     if (typeof value === 'number' && Number.isFinite(value)) {
       const formatter = new Intl.NumberFormat('en-US', {
@@ -350,20 +325,11 @@ export default function App() {
     return '—';
   }
 
-  // Helper for formatting ISO timestamps into the user's local timezone.  The
-  // user's location (New York) is used explicitly so that times match the
-  // expected timezone rather than UTC.  If the input is falsy, an em dash
-  // is returned.
-  const NY_TIME_ZONE = 'America/New_York';
   function formatDateTime(isoString) {
     if (!isoString) return '—';
     try {
-      // Append 'Z' if the ISO string does not specify a timezone.  This
-      // ensures that naive timestamps originating from the backend are
-      // interpreted as UTC before converting to the user's timezone.  Without
-      // the trailing 'Z', JavaScript treats the string as local time.
       let toParse = isoString;
-      if (isoString && !isoString.endsWith('Z')) {
+      if (!isoString.endsWith('Z')) {
         toParse = isoString + 'Z';
       }
       const date = new Date(toParse);
@@ -373,48 +339,25 @@ export default function App() {
     }
   }
 
-  // If the user is not authenticated, display a login form instead of the dashboard.
+  // Determine list of assets for chart selection
+  const assetsList = Array.from(new Set(recommendations.map((r) => r.asset))).filter(Boolean);
+  const defaultAssets = ['BTC/USDT', 'ETH/USDT', 'BNB/USDT', 'ADA/USDT', 'XRP/USDT', 'SOL/USDT'];
+  const selectableAssets = assetsList.length > 0 ? assetsList : defaultAssets;
+
   if (!isAuthenticated) {
     return (
-      <div className="container d-flex justify-content-center align-items-center" style={{ minHeight: '100vh' }}>
-        <form onSubmit={handleLogin} className="bg-dark p-4 rounded" style={{ minWidth: '320px' }}>
-          <h2 className="mb-3 text-light">Login</h2>
-          <div className="mb-3">
-            <label className="form-label text-light" htmlFor="username">Username</label>
-            <input
-              id="username"
-              type="text"
-              className="form-control"
-              value={loginUsername}
-              onChange={(e) => setLoginUsername(e.target.value)}
-              required
-            />
-          </div>
-          <div className="mb-3">
-            <label className="form-label text-light" htmlFor="password">Password</label>
-            <input
-              id="password"
-              type="password"
-              className="form-control"
-              value={loginPassword}
-              onChange={(e) => setLoginPassword(e.target.value)}
-              required
-            />
-          </div>
-          <button type="submit" className="btn btn-primary w-100">
-            Login
-          </button>
-        </form>
-      </div>
+      <LoginPage
+        handleLogin={handleLogin}
+        loginUsername={loginUsername}
+        loginPassword={loginPassword}
+        setLoginUsername={setLoginUsername}
+        setLoginPassword={setLoginPassword}
+      />
     );
   }
 
-  // Render navigation bar on the left and the main content on the right.
-  // Each navigation item corresponds to a section of the dashboard.
   return (
     <div className="container-fluid">
-      {/* Top navigation bar containing a hamburger toggler and brand.  The
-          toggler collapses or expands the sidebar on medium+ screens. */}
       <nav className="navbar navbar-expand-lg navbar-dark bg-dark mb-3">
         <div className="container-fluid d-flex align-items-center">
           <button
@@ -428,65 +371,17 @@ export default function App() {
         </div>
       </nav>
       <div className="row">
-        {/* Sidebar navigation */}
-        <nav className={`col-md-2 bg-dark sidebar py-4 ${sidebarCollapsed ? 'd-md-none' : 'd-none d-md-block'}`}>
-          <div className="position-sticky">
-            <h4 className="text-light px-3 mb-4">Redshot</h4>
-            <ul className="nav nav-pills flex-column mb-auto">
-              <li className="nav-item">
-                <button className={`nav-link text-start ${activeSection === 'portfolio' ? 'active' : ''}`} onClick={() => setActiveSection('portfolio')}>
-                  Portfolio
-                </button>
-              </li>
-              <li className="nav-item">
-                <button className={`nav-link text-start ${activeSection === 'recommendations' ? 'active' : ''}`} onClick={() => setActiveSection('recommendations')}>
-                  Recommendations
-                </button>
-              </li>
-              <li className="nav-item">
-                <button className={`nav-link text-start ${activeSection === 'trades' ? 'active' : ''}`} onClick={() => setActiveSection('trades')}>
-                  Trades
-                </button>
-              </li>
-              <li className="nav-item">
-                <button className={`nav-link text-start ${activeSection === 'research' ? 'active' : ''}`} onClick={() => setActiveSection('research')}>
-                  Research & Strategy
-                </button>
-              </li>
-              <li className="nav-item">
-                <button className={`nav-link text-start ${activeSection === 'strategy' ? 'active' : ''}`} onClick={() => setActiveSection('strategy')}>
-                  Strategy
-                </button>
-              </li>
-              <li className="nav-item">
-                <button className={`nav-link text-start ${activeSection === 'strategy_chart' ? 'active' : ''}`} onClick={() => setActiveSection('strategy_chart')}>
-                  Strategy Chart
-                </button>
-              </li>
-              <li className="nav-item">
-                <button className={`nav-link text-start ${activeSection === 'simulation' ? 'active' : ''}`} onClick={() => setActiveSection('simulation')}>
-                  Simulation Settings
-                </button>
-              </li>
-              <li className="nav-item mt-3">
-                <button className="nav-link text-start text-danger" onClick={handleLogout}>
-                  Logout
-                </button>
-              </li>
-            </ul>
-          </div>
-        </nav>
-        {/* Main content area */}
+        <Sidebar
+          activeSection={activeSection}
+          setActiveSection={setActiveSection}
+          handleLogout={handleLogout}
+          sidebarCollapsed={sidebarCollapsed}
+        />
         <main className="col-md-10 ms-sm-auto px-md-4">
           <div className="pt-4">
             <h1 className="mb-4">Redshot Dashboard</h1>
-            {/* Controls: run simulation and set capital */}
             <div className="d-flex flex-wrap align-items-end mb-4 gap-3">
-              <button
-                className="btn btn-primary"
-                onClick={simulate}
-                disabled={loading}
-              >
+              <button className="btn btn-primary" onClick={simulate} disabled={loading}>
                 {loading ? 'Running...' : 'Run Simulation Cycle'}
               </button>
               <div className="input-group" style={{ maxWidth: '300px' }}>
@@ -504,535 +399,72 @@ export default function App() {
                 </button>
               </div>
             </div>
-
-            {/* Compact system status table.  Display key metrics in a single
-                horizontal row with smaller font.  This table is always
-                visible below the controls to provide at-a-glance status. */}
-            <div className="table-responsive mb-4">
-              <table className="table table-dark table-bordered table-sm mb-0">
-                <thead>
-                  <tr className="small">
-                    <th>Last Cycle</th>
-                    <th>Initial Capital</th>
-                    <th>Cash</th>
-                    <th>Positions Value</th>
-                    <th>Total Value</th>
-                    <th>Variation</th>
-                    <th>P&amp;L</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  <tr className="small">
-                    <td>{formatDateTime(status.last_cycle)}</td>
-                    <td>${formatNumber(status.initial_capital)}</td>
-                    <td>${formatNumber(portfolio.cash)}</td>
-                    <td>${formatNumber(portfolio.total_value - portfolio.cash)}</td>
-                    <td>${formatNumber(portfolio.total_value)}</td>
-                    <td
-                      className={
-                        typeof status.variation === 'number' && Number.isFinite(status.variation)
-                          ? status.variation >= 0
-                            ? 'text-success'
-                            : 'text-danger'
-                          : ''
-                      }
-                    >
-                      {
-                        typeof status.variation === 'number' && Number.isFinite(status.variation)
-                          ? (status.variation * 100).toFixed(2) + '%'
-                          : '—'
-                      }
-                    </td>
-                    <td
-                      className={
-                        typeof status.pnl === 'number' && Number.isFinite(status.pnl)
-                          ? status.pnl >= 0
-                            ? 'text-success'
-                            : 'text-danger'
-                          : ''
-                      }
-                    >
-                      {
-                        typeof status.pnl === 'number' && Number.isFinite(status.pnl)
-                          ? (status.pnl * 100).toFixed(2) + '%'
-                          : '—'
-                      }
-                    </td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-            {/* Conditional sections */}
+            <StatusBar
+              status={status}
+              portfolio={portfolio}
+              formatNumber={formatNumber}
+              formatDateTime={formatDateTime}
+            />
             {activeSection === 'portfolio' && (
-              <div>
-                <h2>Portfolio</h2>
-                <p>
-                  Cash: <strong>${formatNumber(portfolio.cash)}</strong> | Positions Value:{' '}
-                  <strong>${formatNumber(portfolio.total_value - portfolio.cash)}</strong>
-                </p>
-                <div className="table-responsive">
-                  <table className="table table-dark table-hover table-striped table-bordered">
-                    <thead>
-                      <tr>
-                        <th>Asset</th>
-                        <th>Amount</th>
-                        <th>Price</th>
-                        <th>Value</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {portfolio.positions && portfolio.positions.length > 0 ? (
-                        portfolio.positions.map((pos) => (
-                          <tr key={pos.asset}>
-                            <td>{pos.asset}</td>
-                            <td>{formatNumber(pos.amount, 4)}</td>
-                            <td>{formatNumber(pos.price, 4)}</td>
-                            <td>{formatNumber(pos.value)}</td>
-                          </tr>
-                        ))
-                      ) : (
-                        <tr>
-                          <td colSpan="4" className="text-center">
-                            No positions yet
-                          </td>
-                        </tr>
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
+              <PortfolioSection portfolio={portfolio} formatNumber={formatNumber} />
             )}
             {activeSection === 'recommendations' && (
-              <div>
-                <h2>Recommendations</h2>
-                <div className="table-responsive">
-                  <table className="table table-dark table-hover table-striped table-bordered">
-                    <thead>
-                      <tr>
-                        <th>Asset</th>
-                        <th>Side</th>
-                        <th>Price</th>
-                        <th>Confidence</th>
-                        <th>Time</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {recommendations && recommendations.length > 0 ? (
-                        recommendations.map((rec, idx) => (
-                          <tr key={idx}>
-                            <td>{rec.asset}</td>
-                            <td
-                              className={
-                                rec.side && rec.side.toLowerCase() === 'buy'
-                                  ? 'text-success'
-                                  : rec.side && rec.side.toLowerCase() === 'sell'
-                                  ? 'text-danger'
-                                  : ''
-                              }
-                            >
-                              {rec.side ? rec.side.toUpperCase() : '—'}
-                            </td>
-                            <td>{formatNumber(rec.price, 4)}</td>
-                            <td>{
-                              typeof rec.confidence === 'number' && Number.isFinite(rec.confidence)
-                                ? (rec.confidence * 100).toFixed(1) + '%'
-                                : '—'
-                            }</td>
-                            <td>{formatDateTime(rec.timestamp)}</td>
-                          </tr>
-                        ))
-                      ) : (
-                        <tr>
-                          <td colSpan="5" className="text-center">
-                            No recommendations available
-                          </td>
-                        </tr>
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
+              <RecommendationsSection
+                recommendations={recommendations}
+                formatNumber={formatNumber}
+                formatDateTime={formatDateTime}
+              />
             )}
             {activeSection === 'trades' && (
-              <div>
-                <h2>Trades</h2>
-                <div className="table-responsive">
-                  <table className="table table-dark table-hover table-striped table-bordered">
-                    <thead>
-                      <tr>
-                        <th>Time</th>
-                        <th>Exchange</th>
-                        <th>Asset</th>
-                        <th>Quantity</th>
-                        <th>Price</th>
-                        <th>Side</th>
-                        <th>Current Price</th>
-                        <th>P&amp;L</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {tradePerformance && tradePerformance.length > 0 ? (
-                        tradePerformance.map((trade) => {
-                          const pnl = trade.pnl_pct;
-                          const pnlFormatted = typeof pnl === 'number' && Number.isFinite(pnl)
-                            ? pnl.toFixed(2) + '%'
-                            : '—';
-                          return (
-                            <tr key={trade.id}>
-                              <td>{formatDateTime(trade.timestamp)}</td>
-                              <td>{trade.exchange}</td>
-                              <td>{trade.asset_code}</td>
-                              <td>{formatNumber(trade.quantity, 4)}</td>
-                              <td>{formatNumber(trade.price, 4)}</td>
-                              <td
-                                className={
-                                  trade.side && trade.side.toLowerCase() === 'buy'
-                                    ? 'text-success'
-                                    : 'text-danger'
-                                }
-                              >
-                                {trade.side ? trade.side.toUpperCase() : '—'}
-                              </td>
-                              <td>{formatNumber(trade.current_price, 4)}</td>
-                              <td
-                                className={
-                                  typeof pnl === 'number' && Number.isFinite(pnl)
-                                    ? pnl >= 0
-                                      ? 'text-success'
-                                      : 'text-danger'
-                                    : ''
-                                }
-                              >
-                                {pnlFormatted}
-                              </td>
-                            </tr>
-                          );
-                        })
-                      ) : (
-                        <tr>
-                          <td colSpan="8" className="text-center">
-                            No trades recorded
-                          </td>
-                        </tr>
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
+              <TradesSection
+                tradePerformance={tradePerformance}
+                formatNumber={formatNumber}
+                formatDateTime={formatDateTime}
+              />
             )}
             {activeSection === 'research' && (
-              <div>
-                <h2>Market Research &amp; Strategy Activity</h2>
-                <div className="table-responsive">
-                  <table className="table table-dark table-hover table-striped table-bordered">
-                    <thead>
-                      <tr>
-                        <th>Asset</th>
-                        <th>Last Price Provider</th>
-                        <th>Price</th>
-                        <th>Price Timestamp</th>
-                        <th>Historical Provider</th>
-                        <th>Historical Timestamp</th>
-                        <th>Strategy</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {researchActivity && researchActivity.length > 0 ? (
-                        researchActivity.map((item, idx) => {
-                          const priceInfo = item.price || {};
-                          const histInfo = item.historical || {};
-                          const strategy = item.strategy || {};
-                          return (
-                            <tr key={idx}>
-                              <td>{item.asset}</td>
-                              <td>{priceInfo.provider || '—'}</td>
-                              <td>{
-                                typeof priceInfo.price === 'number' && Number.isFinite(priceInfo.price)
-                                  ? priceInfo.price.toFixed(4)
-                                  : '—'
-                              }</td>
-                              <td>{formatDateTime(priceInfo.timestamp)}</td>
-                              <td>{histInfo.provider || '—'}</td>
-                              <td>{formatDateTime(histInfo.timestamp)}</td>
-                              <td>{strategy.name || '—'}</td>
-                            </tr>
-                          );
-                        })
-                      ) : (
-                        <tr>
-                          <td colSpan="7" className="text-center">
-                            No research activity yet
-                          </td>
-                        </tr>
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
+              <ResearchSection
+                researchActivity={researchActivity}
+                formatNumber={formatNumber}
+                formatDateTime={formatDateTime}
+              />
             )}
             {activeSection === 'strategy' && (
-              <div>
-                <h2>Strategy</h2>
-                {/* Configured strategies list */}
-                <h3>Configured Strategies</h3>
-                <ul className="list-group mb-4">
-                  {strategies && strategies.length > 0 ? (
-                    strategies.map((strat, idx) => (
-                      <li key={idx} className="list-group-item bg-dark text-light">
-                        <strong>{strat.name}</strong>: {strat.description}
-                        {strat.parameters && Object.keys(strat.parameters).length > 0 && (
-                          <span>
-                            {' '}(parameters: {Object.entries(strat.parameters).map(([k, v]) => `${k}=${v}`).join(', ')})
-                          </span>
-                        )}
-                      </li>
-                    ))
-                  ) : (
-                    <li className="list-group-item bg-dark text-light">No strategies configured</li>
-                  )}
-                </ul>
-                {/* Strategy calculation details */}
-                <h3>Strategy Calculation Details</h3>
-                <div className="table-responsive mb-4">
-                  <table className="table table-dark table-hover table-striped table-bordered">
-                    <thead>
-                      <tr>
-                        <th>Asset</th>
-                        <th>Short Window</th>
-                        <th>Long Window</th>
-                        <th>Short SMA</th>
-                        <th>Long SMA</th>
-                        <th>Avg Volume</th>
-                        <th>Current Volume</th>
-                        <th>RSI</th>
-                        <th>Threshold</th>
-                        <th>Recommendation</th>
-                        <th>Timestamp</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {strategyDetails && strategyDetails.length > 0 ? (
-                        strategyDetails.map((detail, idx) => {
-                          const isEnhanced = detail.hasOwnProperty('short_window');
-                          const thresholdVal = detail.threshold;
-                          const thresholdFmt = typeof thresholdVal === 'number' && Number.isFinite(thresholdVal)
-                            ? (thresholdVal * 100).toFixed(2) + '%'
-                            : '—';
-                          return (
-                            <tr key={idx}>
-                              <td>{detail.asset}</td>
-                              {isEnhanced ? (
-                                <>
-                                  <td>{detail.short_window ?? '—'}</td>
-                                  <td>{detail.long_window ?? '—'}</td>
-                                  <td>{formatNumber(detail.short_sma, 4)}</td>
-                                  <td>{formatNumber(detail.long_sma, 4)}</td>
-                                  <td>{formatNumber(detail.average_volume)}</td>
-                                  <td>{formatNumber(detail.current_volume)}</td>
-                                  <td>{detail.rsi !== null && detail.rsi !== undefined ? detail.rsi.toFixed(2) : '—'}</td>
-                                </>
-                              ) : (
-                                <>
-                                  <td>{detail.window ?? '—'}</td>
-                                  <td>—</td>
-                                  <td>{formatNumber(detail.average_price, 4)}</td>
-                                  <td>—</td>
-                                  <td>—</td>
-                                  <td>—</td>
-                                  <td>{detail.delta !== null && detail.delta !== undefined ? (detail.delta * 100).toFixed(2) + '%' : '—'}</td>
-                                </>
-                              )}
-                              <td>{thresholdFmt}</td>
-                              <td
-                                className={
-                                  detail.recommendation && detail.recommendation.toLowerCase() === 'buy'
-                                    ? 'text-success'
-                                    : detail.recommendation && detail.recommendation.toLowerCase() === 'sell'
-                                    ? 'text-danger'
-                                    : ''
-                                }
-                              >
-                                {detail.recommendation ? detail.recommendation.toUpperCase() : '—'}
-                              </td>
-                              <td>{formatDateTime(detail.timestamp)}</td>
-                            </tr>
-                          );
-                        })
-                      ) : (
-                        <tr>
-                          <td colSpan="11" className="text-center">
-                            No strategy details available
-                          </td>
-                        </tr>
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-                {/* Strategy parameter adjustment */}
-                <h3>Strategy Parameters</h3>
-                <div className="row mb-3">
-                  {Object.keys(strategyParams).map((key) => (
-                    <div className="col-6 col-md-3 mb-2" key={key}>
-                      <label className="form-label text-capitalize" htmlFor={key}>{key.replace('_', ' ')}</label>
-                      <input
-                        id={key}
-                        type="number"
-                        className="form-control"
-                        value={strategyParams[key]}
-                        onChange={(e) => handleParamChange(e, key)}
-                      />
-                    </div>
-                  ))}
-                  <div className="col-12 mt-2">
-                    <button className="btn btn-secondary" onClick={applyStrategyParams}>Apply Strategy Parameters</button>
-                  </div>
-                </div>
-              </div>
+              <StrategySection
+                strategies={strategies}
+                strategyDetails={strategyDetails}
+                strategyParams={strategyParams}
+                handleParamChange={handleParamChange}
+                applyStrategyParams={applyStrategyParams}
+                formatNumber={formatNumber}
+                formatDateTime={formatDateTime}
+              />
             )}
             {activeSection === 'strategy_chart' && (
-              <div>
-                <h2>Strategy Series Chart</h2>
-                <div className="mb-3">
-                  <label htmlFor="assetSelect" className="form-label">Select Asset:</label>
-                  <select
-                    id="assetSelect"
-                    className="form-select"
-                    value={selectedAsset}
-                    onChange={(e) => {
-                      const asset = e.target.value;
-                      setSelectedAsset(asset);
-                      fetchSeries(asset);
-                    }}
-                  >
-                    {selectableAssets.map((asset) => (
-                      <option key={asset} value={asset}>{asset}</option>
-                    ))}
-                  </select>
-                </div>
-                <div className="chart-container" style={{ position: 'relative', height: '400px' }}>
-                  {(() => {
-                    // Compute threshold bands based on the short SMA and strategy threshold.
-                    const threshold = parseFloat(strategyParams.threshold);
-                    const hasThreshold = !isNaN(threshold);
-                    const upper = hasThreshold
-                      ? seriesData.short_sma.map((v) => (v != null ? v * (1 + threshold) : null))
-                      : [];
-                    const lower = hasThreshold
-                      ? seriesData.short_sma.map((v) => (v != null ? v * (1 - threshold) : null))
-                      : [];
-                    const datasets = [
-                      {
-                        label: 'Price',
-                        data: seriesData.prices,
-                        borderColor: 'rgba(75, 192, 192, 1)',
-                        backgroundColor: 'rgba(75, 192, 192, 0.2)',
-                        tension: 0.1,
-                      },
-                      {
-                        label: 'Short SMA',
-                        data: seriesData.short_sma,
-                        borderColor: 'rgba(255, 99, 132, 1)',
-                        backgroundColor: 'rgba(255, 99, 132, 0.2)',
-                        tension: 0.1,
-                      },
-                      {
-                        label: 'Long SMA',
-                        data: seriesData.long_sma,
-                        borderColor: 'rgba(54, 162, 235, 1)',
-                        backgroundColor: 'rgba(54, 162, 235, 0.2)',
-                        tension: 0.1,
-                      },
-                    ];
-                    if (hasThreshold) {
-                      datasets.push({
-                        label: 'Upper Threshold',
-                        data: upper,
-                        borderColor: 'rgba(255, 206, 86, 1)',
-                        backgroundColor: 'rgba(255, 206, 86, 0.2)',
-                        borderDash: [5, 5],
-                        tension: 0.1,
-                      });
-                      datasets.push({
-                        label: 'Lower Threshold',
-                        data: lower,
-                        borderColor: 'rgba(153, 102, 255, 1)',
-                        backgroundColor: 'rgba(153, 102, 255, 0.2)',
-                        borderDash: [5, 5],
-                        tension: 0.1,
-                      });
-                    }
-                    return (
-                      <Line
-                        data={{ labels: seriesData.x, datasets }}
-                        options={{
-                          responsive: true,
-                          maintainAspectRatio: false,
-                          plugins: {
-                            legend: {
-                              position: 'top',
-                              labels: { color: 'rgba(255,255,255,0.9)' },
-                            },
-                            title: {
-                              display: false,
-                            },
-                            tooltip: {
-                              mode: 'index',
-                              intersect: false,
-                            },
-                          },
-                          scales: {
-                            x: {
-                              ticks: { color: 'rgba(255,255,255,0.9)' },
-                              title: {
-                                display: true,
-                                text: 'Days (oldest to newest)',
-                                color: 'rgba(255,255,255,0.9)',
-                              },
-                            },
-                            y: {
-                              ticks: { color: 'rgba(255,255,255,0.9)' },
-                              title: {
-                                display: true,
-                                text: 'Price',
-                                color: 'rgba(255,255,255,0.9)',
-                              },
-                            },
-                          },
-                        }}
-                      />
-                    );
-                  })()}
-                </div>
-              </div>
+              <StrategyChartSection
+                selectedAsset={selectedAsset}
+                setSelectedAsset={setSelectedAsset}
+                selectableAssets={selectableAssets}
+                seriesData={seriesData}
+                strategyParams={strategyParams}
+                fetchSeries={fetchSeries}
+              />
             )}
-
             {activeSection === 'simulation' && (
-              <div>
-                <h2>Simulation Settings</h2>
-                <p>
-                  Current interval: {' '}
-                  <strong>{
-                    simulationInterval !== null && simulationInterval !== undefined
-                      ? simulationInterval.toFixed(2) + ' minutes'
-                      : '—'
-                  }</strong>
-                </p>
-                <div className="input-group" style={{ maxWidth: '300px' }}>
-                  <input
-                    type="number"
-                    className="form-control"
-                    placeholder="Set interval (minutes)"
-                    value={intervalInput}
-                    onChange={(e) => setIntervalInput(e.target.value)}
-                    min="0.1"
-                    step="0.1"
-                  />
-                  <button className="btn btn-secondary" onClick={updateSimulationInterval}>
-                    Update Interval
-                  </button>
-                </div>
-              </div>
+              <SimulationSettingsSection
+                simulationInterval={simulationInterval}
+                intervalInput={intervalInput}
+                setIntervalInput={setIntervalInput}
+                updateSimulationInterval={updateSimulationInterval}
+              />
             )}
+          </div>
+          <div className="position-fixed top-0 end-0 p-3" style={{ zIndex: 1080 }}>
+            {toasts.map((toast) => (
+              <div key={toast.id} className="alert alert-info alert-dismissible fade show" role="alert">
+                {toast.message}
+              </div>
+            ))}
           </div>
         </main>
       </div>
