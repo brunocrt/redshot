@@ -20,6 +20,7 @@ import logging
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Dict, List, Optional
+import time
 
 import requests
 
@@ -189,18 +190,27 @@ class MarketResearcher:
         LOGGER.debug(
             "Requesting historical prices for %s over %d days via CoinGecko", coin_id, days
         )
-        try:
-            resp = self.session.get(url, timeout=10)
-            resp.raise_for_status()
-            data = resp.json()
-            price_entries = data.get("prices", [])
-            prices = [entry[1] for entry in price_entries]
-            provider = "CoinGecko"
-        except Exception as exc:
-            # Log at warning level for expected failures (e.g. HTTP 429 rate limits)
-            LOGGER.warning(
-                "CoinGecko historical data request failed for %s: %s", coin_id, exc
-            )
+        # Attempt to fetch historical data from CoinGecko with a simple retry on HTTP 429.
+        for attempt in range(2):
+            try:
+                resp = self.session.get(url, timeout=10)
+                resp.raise_for_status()
+                data = resp.json()
+                price_entries = data.get("prices", [])
+                prices = [entry[1] for entry in price_entries]
+                provider = "CoinGecko"
+                break
+            except requests.exceptions.HTTPError as exc:
+                status = exc.response.status_code if exc.response else None
+                if status == 429 and attempt == 0:
+                    LOGGER.warning("CoinGecko historical data request for %s hit rate limit; retrying after delay", coin_id)
+                    time.sleep(2)
+                    continue
+                LOGGER.warning("CoinGecko historical data request failed for %s: %s", coin_id, exc)
+                break
+            except Exception as exc:
+                LOGGER.warning("CoinGecko historical data request failed for %s: %s", coin_id, exc)
+                break
 
         if prices is None:
             # Fallback to Binance
@@ -277,21 +287,31 @@ class MarketResearcher:
         )
         url = self.base_url + endpoint
         LOGGER.debug("Requesting historical price/volume data for %s via CoinGecko", coin_id)
-        try:
-            resp = self.session.get(url, timeout=10)
-            resp.raise_for_status()
-            data = resp.json()
-            price_entries = data.get("prices", [])
-            volume_entries = data.get("total_volumes", [])
-            prices = [entry[1] for entry in price_entries]
-            volumes = [entry[1] for entry in volume_entries]
-            if prices and volumes and len(prices) == len(volumes):
-                result = {"prices": prices, "volumes": volumes}
-                provider = "CoinGecko"
-        except Exception as exc:
-            LOGGER.warning(
-                "CoinGecko historical price/volume request failed for %s: %s", coin_id, exc
-            )
+        # Attempt to fetch historical price/volume from CoinGecko with a simple retry on HTTP 429.
+        for attempt in range(2):
+            try:
+                resp = self.session.get(url, timeout=10)
+                resp.raise_for_status()
+                data = resp.json()
+                price_entries = data.get("prices", [])
+                volume_entries = data.get("total_volumes", [])
+                prices = [entry[1] for entry in price_entries]
+                volumes = [entry[1] for entry in volume_entries]
+                if prices and volumes and len(prices) == len(volumes):
+                    result = {"prices": prices, "volumes": volumes}
+                    provider = "CoinGecko"
+                break
+            except requests.exceptions.HTTPError as exc:
+                status = exc.response.status_code if exc.response else None
+                if status == 429 and attempt == 0:
+                    LOGGER.warning("CoinGecko historical price/volume request for %s hit rate limit; retrying after delay", coin_id)
+                    time.sleep(2)
+                    continue
+                LOGGER.warning("CoinGecko historical price/volume request failed for %s: %s", coin_id, exc)
+                break
+            except Exception as exc:
+                LOGGER.warning("CoinGecko historical price/volume request failed for %s: %s", coin_id, exc)
+                break
         # Fallback to Binance if necessary
         if result is None:
             symbol = COINGECKO_ID_TO_BINANCE_SYMBOL.get(coin_id)
