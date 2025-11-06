@@ -1,0 +1,33 @@
+
+name: Nightly Backtest
+on:
+  schedule:
+    - cron: '17 2 * * *'  # daily at 02:17 UTC
+  workflow_dispatch:
+
+jobs:
+  backtest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-ext.txt
+      - name: Run study (BTC/USDT 1h)
+        env:
+          EXCHANGE: binance
+          SYMBOL: BTC/USDT
+          TIMEFRAME: 1h
+        run: |
+          python research/optuna_study.py --symbol "$SYMBOL" --exchange "$EXCHANGE" --timeframe "$TIMEFRAME" --trials 120
+      - name: Archive artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: backtest-results
+          path: |
+            .
+          if-no-files-found: ignore
